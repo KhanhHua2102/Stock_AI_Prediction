@@ -48,148 +48,7 @@ def training_path(filename: str) -> str:
     os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
     return os.path.join(TRAINING_DATA_DIR, filename)
 
-# -----------------------------
-# BTCMarkets market-data (current ASK):
-#   Australian exchange with native AUD pairs
-#   Rate limit: 50 requests per 10 seconds (5 req/sec)
-# -----------------------------
-
-class BTCMarketsMarketData:
-    """BTCMarkets market data client for price info."""
-
-    BASE_URL = "https://api.btcmarkets.net/v3"
-
-    def __init__(self):
-        pass
-
-    def get_current_ask(self, symbol: str) -> float:
-        """Get current ask price from BTCMarkets"""
-        return btcmarkets_current_ask(symbol)
-
-
-def btcmarkets_current_ask(symbol: str) -> float:
-    """
-    Returns BTCMarkets current ASK price for symbols like 'BTC-AUD'.
-    Uses public BTCMarkets API - no credentials needed.
-
-    PERFORMANCE FIX (Issue #5): Uses httpx client with connection pooling
-    when available, falls back to requests for backward compatibility.
-    """
-    try:
-        url = f"https://api.btcmarkets.net/v3/markets/{symbol}/ticker"
-
-        # PERFORMANCE FIX: Use pooled HTTP client if available
-        if _PERF_UTILS_AVAILABLE:
-            http_client = get_http_client()
-            data = http_client.get_sync(url)
-        else:
-            # Fallback to requests
-            response = requests.get(url, timeout=10)
-            if response.status_code != 200:
-                raise RuntimeError(
-                    f"BTCMarkets API returned status {response.status_code}: {response.text}"
-                )
-            data = response.json()
-
-        # BTCMarkets ticker has 'bestAsk' field
-        best_ask = data.get("bestAsk")
-        if best_ask is None:
-            # Fallback to lastPrice if bestAsk not available
-            best_ask = data.get("lastPrice")
-
-        if best_ask is None:
-            raise RuntimeError(f"BTCMarkets ticker missing price data for {symbol}: {data}")
-
-        return float(best_ask)
-
-    except Exception as e:
-        raise RuntimeError(f"Failed to get BTCMarkets ticker for {symbol}: {e}")
-
-
-# BTCMarkets market data client for OHLC candles (compatible with KuCoin interface)
-class BTCMarketsMarket:
-    """BTCMarkets market client with get_kline method compatible with KuCoin interface."""
-
-    BASE_URL = "https://api.btcmarkets.net/v3"
-    MIN_REQUEST_INTERVAL = 0.2  # 50 requests per 10 seconds
-
-    TIMEFRAME_MAP = {
-        "1min": "1m",
-        "5min": "5m",
-        "15min": "15m",
-        "30min": "30m",
-        "1hour": "1h",
-        "2hour": "1h",
-        "4hour": "4h",
-        "8hour": "4h",
-        "12hour": "1d",
-        "1day": "1d",
-        "1week": "1w",
-    }
-
-    def __init__(self):
-        self._last_request_time = 0
-
-    def _rate_limit(self):
-        import time as _t
-        now = _t.time()
-        elapsed = now - self._last_request_time
-        if elapsed < self.MIN_REQUEST_INTERVAL:
-            _t.sleep(self.MIN_REQUEST_INTERVAL - elapsed)
-        self._last_request_time = _t.time()
-
-    def get_kline(self, pair: str, timeframe: str, startAt: int = None, endAt: int = None):
-        """Fetch OHLC data from BTCMarkets. Returns KuCoin-compatible format.
-
-        PERFORMANCE FIX (Issue #5): Uses pooled HTTP client for better
-        connection reuse and reduced latency.
-        """
-        self._rate_limit()
-
-        # Convert USDT pairs to AUD for BTCMarkets
-        if pair.endswith("-USDT"):
-            pair = pair.replace("-USDT", "-AUD")
-
-        time_window = self.TIMEFRAME_MAP.get(timeframe, "1h")
-        url = f"{self.BASE_URL}/markets/{pair}/candles"
-        params = {"timeWindow": time_window, "limit": 200}  # BTCMarkets max is 200
-
-        # PERFORMANCE FIX: Use pooled HTTP client if available
-        if _PERF_UTILS_AVAILABLE:
-            http_client = get_http_client()
-            data = http_client.get_sync(url, params=params)
-        else:
-            resp = requests.get(url, params=params, timeout=30)
-            if resp.status_code != 200:
-                raise Exception(f"BTCMarkets API error: {resp.status_code} - {resp.text}")
-            data = resp.json()
-
-        if not data or not isinstance(data, list):
-            return []
-
-        # BTCMarkets format: [time, open, high, low, close, volume]
-        # Convert to KuCoin format: [timestamp, open, close, high, low, volume, turnover]
-        from datetime import datetime as dt, timezone as tz
-        converted = []
-        for candle in data:
-            try:
-                time_str = candle[0]
-                dt_obj = dt.fromisoformat(time_str.replace("Z", "+00:00"))
-                timestamp = int(dt_obj.timestamp())
-                open_price = candle[1]
-                high = candle[2]
-                low = candle[3]
-                close = candle[4]
-                volume = candle[5]
-                converted.append([timestamp, open_price, close, high, low, volume, "0"])
-            except (IndexError, ValueError):
-                continue
-
-        return converted
-
-
-# Global market instance
-market = BTCMarketsMarket()
+from stock_data_fetcher import market
 
 
 def restart_program():
@@ -308,9 +167,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def coin_folder(sym: str) -> str:
-    sym = sym.upper()
-    # Your "main folder is BTC folder" convention:
-    return BASE_DIR if sym == "BTC" else os.path.join(BASE_DIR, sym)
+    # Sanitize ticker for filesystem: ^GSPC -> GSPC, GLOB.AX -> GLOB_AX
+    safe_name = sym.upper().replace("^", "").replace(".", "_")
+    return os.path.join(BASE_DIR, safe_name)
 
 
 # --- training freshness gate (mirrors pt_hub.py) ---
@@ -384,7 +243,7 @@ for _sym in CURRENT_COINS:
 
 
 distance = 0.5
-tf_choices = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
+tf_choices = ["1day", "1week"]
 
 
 def new_coin_state():
@@ -506,18 +365,14 @@ def init_coin(sym: str):
 
     st = new_coin_state()
 
-    coin = sym + "-USDT"
+    coin = sym  # ticker passed directly (no suffix)
     ind = 0
     tf_times_local = []
     while True:
         history_list = []
         while True:
             try:
-                history = (
-                    str(market.get_kline(coin, tf_choices[ind]))
-                    .replace("]]", "], ")
-                    .replace("[[", "[")
-                )
+                history_list = market.get_kline(coin, tf_choices[ind])
                 break
             except Exception as e:
                 time.sleep(3.5)
@@ -527,13 +382,9 @@ def init_coin(sym: str):
                     PrintException()
                 continue
 
-        history_list = history.split("], [")
         ind += 1
         try:
-            working_minute = (
-                str(history_list[1]).replace('"', "").replace("'", "").split(", ")
-            )
-            the_time = working_minute[0].replace("[", "")
+            the_time = history_list[1][0]
         except Exception:
             the_time = 0.0
 
@@ -611,7 +462,7 @@ def find_purple_area(lines):
 def step_coin(sym: str):
     # run inside the coin folder so all existing file reads/writes stay relative + isolated
     os.chdir(coin_folder(sym))
-    coin = sym + "-USDT"
+    coin = sym  # ticker passed directly (no suffix)
     st = states[sym]
 
     # --- training freshness gate ---
@@ -682,11 +533,7 @@ def step_coin(sym: str):
         history_list = []
         while True:
             try:
-                history = (
-                    str(market.get_kline(coin, tf_choices[tf_choice_index]))
-                    .replace("]]", "], ")
-                    .replace("[[", "[")
-                )
+                history_list = market.get_kline(coin, tf_choices[tf_choice_index])
                 break
             except Exception as e:
                 time.sleep(3.5)
@@ -695,18 +542,12 @@ def step_coin(sym: str):
                 else:
                     pass
                 continue
-        history_list = history.split("], [")
-        # KuCoin can occasionally return an empty/short kline response.
-        # Guard against history_list[1] raising IndexError.
         if len(history_list) < 2:
             time.sleep(0.2)
             continue
-        working_minute = (
-            str(history_list[1]).replace('"', "").replace("'", "").split(", ")
-        )
         try:
-            openPrice = float(working_minute[1])
-            closePrice = float(working_minute[2])
+            openPrice = float(history_list[1][1])
+            closePrice = float(history_list[1][2])
             break
         except Exception:
             continue
@@ -958,11 +799,10 @@ def step_coin(sym: str):
         # reset tf_update for this coin (but DO NOT block-wait; just detect updates and return)
         tf_update = ["no"] * len(tf_choices)
 
-        # get current price ONCE per coin — use BTCMarkets current ASK
-        btc_symbol = f"{sym}-AUD"
+        # get current price ONCE per coin
         while True:
             try:
-                current = btcmarkets_current_ask(btc_symbol)
+                current = market.get_current_price(sym)
                 break
             except Exception:
                 time.sleep(1)
@@ -1009,11 +849,7 @@ def step_coin(sym: str):
             while True:
 
                 try:
-                    history = (
-                        str(market.get_kline(coin, tf_choices[inder]))
-                        .replace("]]", "], ")
-                        .replace("[[", "[")
-                    )
+                    history_list = market.get_kline(coin, tf_choices[inder])
                     break
                 except Exception as e:
                     time.sleep(3.5)
@@ -1023,12 +859,8 @@ def step_coin(sym: str):
                         PrintException()
                     continue
 
-            history_list = history.split("], [")
             try:
-                working_minute = (
-                    str(history_list[1]).replace('"', "").replace("'", "").split(", ")
-                )
-                the_time = working_minute[0].replace("[", "")
+                the_time = history_list[1][0]
             except Exception:
                 the_time = 0.0
 
@@ -1385,11 +1217,7 @@ def step_coin(sym: str):
         while this_index_now < len(tf_update):
             while True:
                 try:
-                    history = (
-                        str(market.get_kline(coin, tf_choices[this_index_now]))
-                        .replace("]]", "], ")
-                        .replace("[[", "[")
-                    )
+                    history_list = market.get_kline(coin, tf_choices[this_index_now])
                     break
                 except Exception as e:
                     time.sleep(3.5)
@@ -1399,12 +1227,8 @@ def step_coin(sym: str):
                         PrintException()
                     continue
 
-            history_list = history.split("], [")
             try:
-                working_minute = (
-                    str(history_list[1]).replace('"', "").replace("'", "").split(", ")
-                )
-                the_time = working_minute[0].replace("[", "")
+                the_time = history_list[1][0]
             except Exception:
                 the_time = 0.0
 

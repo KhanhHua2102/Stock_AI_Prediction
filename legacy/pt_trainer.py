@@ -1,116 +1,4 @@
-import requests
-import time as _time
-from datetime import datetime, timezone
-
-# BTCMarkets API for market data (Australian exchange, supports AUD pairs)
-# Rate limit: 50 requests per 10 seconds (5 req/sec) - 5x faster than Kraken
-class BTCMarketsAPI:
-    """BTCMarkets market data client for OHLC candles."""
-
-    BASE_URL = "https://api.btcmarkets.net/v3"
-
-    # Rate limiting: 50 requests per 10 seconds = 0.2 seconds between requests
-    MIN_REQUEST_INTERVAL = 0.2
-
-    # BTCMarkets timeframe mapping
-    # Supports: 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w
-    TIMEFRAME_MAP = {
-        "1min": "1m",
-        "5min": "5m",
-        "15min": "15m",
-        "30min": "30m",
-        "1hour": "1h",
-        "2hour": "1h",    # Use 1h data for 2h (not natively supported)
-        "4hour": "4h",
-        "8hour": "4h",    # Use 4h data for 8h (not natively supported)
-        "12hour": "1d",   # Use 1d data for 12h (not natively supported)
-        "1day": "1d",
-        "1week": "1w",
-    }
-
-    def __init__(self):
-        self._last_request_time = 0
-
-    def _rate_limit(self):
-        """Enforce rate limiting between API requests."""
-        now = _time.time()
-        elapsed = now - self._last_request_time
-        if elapsed < self.MIN_REQUEST_INTERVAL:
-            _time.sleep(self.MIN_REQUEST_INTERVAL - elapsed)
-        self._last_request_time = _time.time()
-
-    def get_kline(self, pair: str, timeframe: str, startAt: int = None, endAt: int = None):
-        """
-        Fetch OHLC data from BTCMarkets.
-        Returns data in KuCoin-compatible format: [[timestamp, open, close, high, low, volume, turnover], ...]
-        """
-        self._rate_limit()
-
-        # BTCMarkets uses pair format like "BTC-AUD" (same as KuCoin)
-        time_window = self.TIMEFRAME_MAP.get(timeframe, "1h")
-
-        # Build URL
-        url = f"{self.BASE_URL}/markets/{pair}/candles"
-        params = {"timeWindow": time_window, "limit": 200}  # BTCMarkets max is 200
-
-        # BTCMarkets uses ISO 8601 timestamps
-        if startAt and startAt > 1262304000:
-            from_dt = datetime.fromtimestamp(startAt, tz=timezone.utc)
-            params["from"] = from_dt.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
-        if endAt:
-            to_dt = datetime.fromtimestamp(endAt, tz=timezone.utc)
-            params["to"] = to_dt.strftime("%Y-%m-%dT%H:%M:%S.000000Z")
-
-        resp = requests.get(url, params=params, timeout=30)
-
-        if resp.status_code != 200:
-            raise Exception(f"BTCMarkets API error: {resp.status_code} - {resp.text}")
-
-        data = resp.json()
-
-        if not data or not isinstance(data, list):
-            return []
-
-        # BTCMarkets format: [time, open, high, low, close, volume]
-        # Convert to KuCoin format: [timestamp, open, close, high, low, volume, turnover]
-        converted = []
-        for candle in data:
-            # candle is array: [time (ISO string), open, high, low, close, volume]
-            try:
-                time_str = candle[0]
-                # Parse ISO timestamp to Unix timestamp
-                dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-                timestamp = int(dt.timestamp())
-                open_price = candle[1]
-                high = candle[2]
-                low = candle[3]
-                close = candle[4]
-                volume = candle[5]
-                # KuCoin format: timestamp, open, close, high, low, volume, turnover
-                converted.append([timestamp, open_price, close, high, low, volume, "0"])
-            except (IndexError, ValueError) as e:
-                continue
-
-        return converted
-
-    def get_ticker(self, pair: str):
-        """
-        Fetch current ticker data from BTCMarkets.
-        Returns dict with 'price' key for compatibility.
-        """
-        self._rate_limit()
-
-        url = f"{self.BASE_URL}/markets/{pair}/ticker"
-        resp = requests.get(url, timeout=30)
-
-        if resp.status_code != 200:
-            raise Exception(f"BTCMarkets API error: {resp.status_code} - {resp.text}")
-
-        data = resp.json()
-        # BTCMarkets ticker has 'lastPrice' field
-        return {"price": data.get("lastPrice", "0")}
-
-market = BTCMarketsAPI()
+from stock_data_fetcher import market
 import time
 
 """
@@ -416,8 +304,8 @@ try:
         pass
 except:
     restarted_yet = 0
-tf_choices = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
-tf_minutes = [60, 120, 240, 480, 720, 1440, 10080]
+tf_choices = ["1day", "1week"]
+tf_minutes = [1440, 10080]
 # --- GUI HUB INPUT (NO PROMPTS) ---
 # Usage: python pt_trainer.py BTC [reprocess_yes|reprocess_no]
 _arg_coin = "BTC"
@@ -428,7 +316,14 @@ try:
 except Exception:
     _arg_coin = "BTC"
 
-coin_choice = _arg_coin + "-AUD"
+coin_choice = _arg_coin  # tickers like "^GSPC", "GLOB.AX", "VNINDEX" passed directly
+print(f"[TRAINER] Starting training for {coin_choice}")
+
+# Update TRAINING_DATA_DIR to per-coin subdirectory
+_safe_coin = _arg_coin.replace("^", "").replace(".", "_")
+TRAINING_DATA_DIR = os.path.join(TRAINING_DATA_DIR, _safe_coin)
+os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
+print(f"[TRAINER] Training data dir: {TRAINING_DATA_DIR}")
 
 restart_processing = "yes"
 
@@ -593,22 +488,19 @@ while True:
     end_time = int(start_time - ((1500 * timeframe_minutes) * 60))
     perc_comp = format((len(history_list2) / how_far_to_look_back) * 100, ".2f")
     last_perc_comp = perc_comp + "kjfjakjdakd"
+    print(f"[TRAINER] Downloading {timeframe} data for {coin_choice}...")
     while True:
         time.sleep(0.5)
         try:
-            history = (
-                str(
-                    market.get_kline(
-                        coin_choice, timeframe, startAt=end_time, endAt=start_time
-                    )
-                )
-                .replace("]]", "], ")
-                .replace("[[", "[")
-                .split("], [")
+            history = market.get_kline(
+                coin_choice, timeframe, startAt=end_time, endAt=start_time
             )
         except Exception as e:
             PrintException()
             time.sleep(3.5)
+            continue
+        if not history:
+            time.sleep(1)
             continue
         index = 0
         while True:
@@ -619,7 +511,7 @@ while True:
             else:
                 continue
         perc_comp = format((len(history_list) / how_far_to_look_back) * 100, ".2f")
-        print("gathering history")
+        print(f"[TRAINER] Download progress: {perc_comp}% ({len(history_list)}/{how_far_to_look_back})")
         current_change = len(history_list) - list_len
         try:
             print("\n\n\n\n")
@@ -659,20 +551,20 @@ while True:
     minutes_passed = 0
     try:
         while True:
-            working_minute = (
-                str(history_list[index]).replace('"', "").replace("'", "").split(", ")
-            )
+            candle = history_list[index]
+            if isinstance(candle, str):
+                candle = candle.replace('"', "").replace("'", "").replace("[", "").replace("]", "").split(", ")
             try:
                 if index == 1:
-                    current_tf_time = float(working_minute[0].replace("[", ""))
+                    current_tf_time = float(candle[0])
                     last_tf_time = current_tf_time
                 else:
                     pass
-                candle_time = float(working_minute[0].replace("[", ""))
-                openPrice = float(working_minute[1])
-                closePrice = float(working_minute[2])
-                highPrice = float(working_minute[3])
-                lowPrice = float(working_minute[4])
+                candle_time = float(candle[0])
+                openPrice = float(candle[1])
+                closePrice = float(candle[2])
+                highPrice = float(candle[3])
+                lowPrice = float(candle[4])
                 open_price_list.append(openPrice)
                 price_list.append(closePrice)
                 high_price_list.append(highPrice)
@@ -693,19 +585,7 @@ while True:
         price_list.reverse()
         high_price_list.reverse()
         low_price_list.reverse()
-        ticker_data = (
-            str(market.get_ticker(coin_choice))
-            .replace('"', "")
-            .replace("'", "")
-            .replace("[", "")
-            .replace("{", "")
-            .replace("]", "")
-            .replace("}", "")
-            .replace(",", "")
-            .lower()
-            .split(" ")
-        )
-        price = float(ticker_data[ticker_data.index("price:") + 1])
+        price = float(market.get_ticker(coin_choice)["price"])
     except:
         PrintException()
     history_list = []

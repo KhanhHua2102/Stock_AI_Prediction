@@ -14,12 +14,10 @@ class Settings(BaseSettings):
     # Scripts (in legacy folder)
     script_neural_runner: str = "legacy/pt_thinker.py"
     script_trainer: str = "legacy/pt_trainer.py"
-    script_trader: str = "legacy/pt_trader.py"
-
-    # Trading config
-    coins: List[str] = ["BTC"]
-    default_timeframe: str = "1hour"
-    timeframes: List[str] = ["1min", "5min", "15min", "30min", "1hour", "4hour", "1day", "1week"]
+    # Stock prediction config
+    tickers: List[str] = ["VNINDEX", "^GSPC", "GLOB.AX", "HCRD.AX", "BGBL.AX", "A200.AX"]
+    default_timeframe: str = "1day"
+    timeframes: List[str] = ["1day", "1week"]
     candles_limit: int = 120
 
     # Refresh rates
@@ -36,15 +34,11 @@ class Settings(BaseSettings):
 
     # CORS - SECURITY FIX (Issue #5)
     # Set via PT_CORS_ORIGINS environment variable (comma-separated)
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8081,http://127.0.0.1:8081"
 
     # Rate Limiting - SECURITY FIX (Issue #7)
     rate_limit_per_minute: int = 60
 
-    # Kraken credentials - SECURITY FIX (Issue #1)
-    # Priority: 1. Environment variables, 2. Files (fallback)
-    kraken_key: Optional[str] = None
-    kraken_secret: Optional[str] = None
 
     class Config:
         env_prefix = "PT_"
@@ -52,7 +46,6 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._load_gui_settings()
-        self._load_kraken_credentials()
         self._setup_api_key()
 
         # Set default hub_data_dir if not specified
@@ -97,8 +90,10 @@ class Settings(BaseSettings):
                 with open(settings_path) as f:
                     data = json.load(f)
 
-                if data.get("coins"):
-                    self.coins = data["coins"]
+                if data.get("tickers"):
+                    self.tickers = data["tickers"]
+                elif data.get("coins"):
+                    self.tickers = data["coins"]
                 if data.get("default_timeframe"):
                     self.default_timeframe = data["default_timeframe"]
                 if data.get("timeframes"):
@@ -115,37 +110,8 @@ class Settings(BaseSettings):
                     self.script_neural_runner = data["script_neural_runner2"]
                 if data.get("script_neural_trainer"):
                     self.script_trainer = data["script_neural_trainer"]
-                if data.get("script_trader"):
-                    self.script_trader = data["script_trader"]
+                pass  # script_trader removed
             except Exception:
                 pass
-
-    def _load_kraken_credentials(self):
-        """Load Kraken API credentials.
-
-        SECURITY FIX (Issue #1): Priority order:
-        1. Environment variables (PT_KRAKEN_KEY, PT_KRAKEN_SECRET) - RECOMMENDED
-        2. Files (kraken_key.txt, kraken_secret.txt) - Fallback for backward compatibility
-
-        For production, use environment variables:
-            export PT_KRAKEN_KEY="your-api-key"
-            export PT_KRAKEN_SECRET="your-api-secret"
-        """
-        # Environment variables are already loaded by pydantic-settings
-        # Only load from files if not set via environment
-        if not self.kraken_key:
-            key_path = self.project_dir / "kraken_key.txt"
-            if key_path.exists():
-                self.kraken_key = key_path.read_text().strip()
-                print("WARNING: Loading Kraken API key from file. "
-                      "Consider using PT_KRAKEN_KEY environment variable instead.")
-
-        if not self.kraken_secret:
-            secret_path = self.project_dir / "kraken_secret.txt"
-            if secret_path.exists():
-                self.kraken_secret = secret_path.read_text().strip()
-                print("WARNING: Loading Kraken API secret from file. "
-                      "Consider using PT_KRAKEN_SECRET environment variable instead.")
-
 
 settings = Settings()

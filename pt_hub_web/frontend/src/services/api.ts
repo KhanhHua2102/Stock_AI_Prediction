@@ -1,7 +1,4 @@
 import type {
-  TraderStatus,
-  PortfolioItem,
-  Trade,
   Candle,
   ChartOverlays,
   TrainingStatus,
@@ -29,32 +26,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 
-// Account endpoints
-export const accountApi = {
-  getStatus: () => fetchJson<TraderStatus>('/account/status'),
-
-  getPortfolio: () =>
-    fetchJson<{ portfolio: PortfolioItem[]; timestamp: number }>('/account/portfolio'),
-
-  getPnl: () => fetchJson<{ total_realized_profit_aud: number }>('/account/pnl'),
-
-  getHistory: (limit = 500) =>
-    fetchJson<{ history: { ts: number; total_account_value: number }[] }>(
-      `/account/history?limit=${limit}`
-    ),
-
-  getTrades: (limit = 250) => fetchJson<{ trades: Trade[] }>(`/account/trades?limit=${limit}`),
-
-  getHoldingHistory: (asset: string, interval = 240) =>
-    fetchJson<{
-      asset: string;
-      current_balance: number;
-      data: { time: number; balance: number; price: number; value: number }[];
-      trades: { time: number; side: string; price: number; qty: number }[];
-    }>(`/account/holding-history/${asset}?interval=${interval}`),
-};
-
-// Trading endpoints
+// Runner endpoints (process management)
 export const tradingApi = {
   getProcesses: () => fetchJson<ProcessStatus>('/trading/processes'),
 
@@ -63,27 +35,17 @@ export const tradingApi = {
 
   stopAll: () => fetchJson<{ status: string }>('/trading/stop-all', { method: 'POST' }),
 
-  startNeural: () => fetchJson<{ status: string }>('/trading/start-neural', { method: 'POST' }),
+  getTickers: () => fetchJson<{ tickers: string[]; available: string[] }>('/trading/tickers'),
 
-  stopNeural: () => fetchJson<{ status: string }>('/trading/stop-neural', { method: 'POST' }),
-
-  startTrader: () => fetchJson<{ status: string }>('/trading/start-trader', { method: 'POST' }),
-
-  stopTrader: () => fetchJson<{ status: string }>('/trading/stop-trader', { method: 'POST' }),
-
-  getPositions: () => fetchJson<{ positions: Record<string, unknown> }>('/trading/positions'),
-
-  getCoins: () => fetchJson<{ coins: string[]; available: string[] }>('/trading/coins'),
-
-  setCoins: (coins: string[]) =>
-    fetchJson<{ coins: string[] }>('/trading/coins', {
+  setTickers: (tickers: string[]) =>
+    fetchJson<{ tickers: string[] }>('/trading/tickers', {
       method: 'POST',
-      body: JSON.stringify({ coins }),
+      body: JSON.stringify({ tickers }),
     }),
 
-  getLogs: (source: string, limit = 100, coin?: string) => {
+  getLogs: (source: string, limit = 100, ticker?: string) => {
     const params = new URLSearchParams({ limit: String(limit) });
-    if (coin) params.set('coin', coin);
+    if (ticker) params.set('ticker', ticker);
     return fetchJson<{ logs: string[] }>(`/trading/logs/${source}?${params}`);
   },
 };
@@ -92,57 +54,58 @@ export const tradingApi = {
 export const trainingApi = {
   getStatus: () => fetchJson<{ status: TrainingStatus }>('/training/status'),
 
-  start: (coin: string) =>
-    fetchJson<{ status: string; coin: string; process_status?: ProcessStatus }>(`/training/start/${coin}`, { method: 'POST' }),
+  start: (ticker: string) =>
+    fetchJson<{ status: string; ticker: string; process_status?: ProcessStatus }>(`/training/start/${ticker}`, { method: 'POST' }),
 
-  stop: (coin: string) =>
-    fetchJson<{ status: string; coin: string; process_status?: ProcessStatus }>(`/training/stop/${coin}`, { method: 'POST' }),
+  stop: (ticker: string) =>
+    fetchJson<{ status: string; ticker: string; process_status?: ProcessStatus }>(`/training/stop/${ticker}`, { method: 'POST' }),
 
   clear: () => fetchJson<{ status: string }>('/training/clear', { method: 'POST' }),
 
   getNeuralSignals: () => fetchJson<{ signals: Record<string, NeuralSignal> }>('/training/neural-signals'),
 
-  getCoinSignals: (coin: string) => fetchJson<NeuralSignal>(`/training/neural-signals/${coin}`),
+  getTickerSignals: (ticker: string) => fetchJson<NeuralSignal>(`/training/neural-signals/${ticker}`),
 
-  getLogs: (coin: string, limit = 100) =>
-    fetchJson<{ logs: string[]; coin: string }>(`/training/logs/${coin}?limit=${limit}`),
+  getLogs: (ticker: string, limit = 100) =>
+    fetchJson<{ logs: string[]; ticker: string }>(`/training/logs/${ticker}?limit=${limit}`),
 };
 
 // Charts endpoints
 export const chartsApi = {
-  getCandles: (coin: string, timeframe = '1hour', limit = 120) =>
+  getCandles: (ticker: string, timeframe = '1day', limit = 120) =>
     fetchJson<{ candles: Candle[]; pair: string; timeframe: string }>(
-      `/charts/candles/${coin}?timeframe=${timeframe}&limit=${limit}`
+      `/charts/candles/${ticker}?timeframe=${timeframe}&limit=${limit}`
     ),
 
-  getNeuralLevels: (coin: string) =>
-    fetchJson<{ long: number[]; short: number[] }>(`/charts/neural-levels/${coin}`),
+  getNeuralLevels: (ticker: string) =>
+    fetchJson<{ long: number[]; short: number[] }>(`/charts/neural-levels/${ticker}`),
 
-  getAccountValue: (limit = 500, holding?: string) => {
-    const params = new URLSearchParams({ limit: String(limit) });
-    if (holding) params.set('holding', holding);
-    return fetchJson<{
-      data: { time: number; value: number }[];
-      trades: {
-        time: number;
-        side: string;
-        tag: string;
-        symbol: string;
-        price: number;
-        qty: number;
-        pnl: number;
-      }[];
-    }>(`/charts/account-value?${params}`);
-  },
+  getOverlays: (ticker: string) => fetchJson<ChartOverlays>(`/charts/overlays/${ticker}`),
+};
 
-  getHoldingsList: () => fetchJson<{ holdings: string[] }>('/charts/holdings-list'),
-
-  getOverlays: (coin: string) => fetchJson<ChartOverlays>(`/charts/overlays/${coin}`),
+// Predictions endpoints
+export const predictionsApi = {
+  get: (ticker: string) =>
+    fetchJson<{
+      signals: Record<string, { long: number; short: number; high_bound: number; low_bound: number }>;
+      current_price: number;
+    }>(`/predictions/${ticker}`),
 };
 
 // Settings endpoints
 export const settingsApi = {
   get: () => fetchJson<Settings>('/settings'),
+
+  searchTicker: (q: string) =>
+    fetchJson<{ results: { symbol: string; name: string; exchange: string }[] }>(
+      `/settings/search-ticker?q=${encodeURIComponent(q)}`
+    ),
+
+  updateTickers: (tickers: string[]) =>
+    fetchJson<Settings>('/settings/tickers', {
+      method: 'POST',
+      body: JSON.stringify({ tickers }),
+    }),
 };
 
 // Health check

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTradeStore } from '../store/tradeStore';
 import { useTrainingStore } from '../store/trainingStore';
-import type { WSMessage, ProcessStatus, TraderStatus, Trade, NeuralSignal } from '../services/types';
+import type { WSMessage, ProcessStatus, NeuralSignal } from '../services/types';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -12,9 +12,7 @@ export function useWebSocket() {
 
   const {
     setProcessStatus,
-    setTraderStatus,
     addLog,
-    addTrade,
   } = useTradeStore();
 
   const {
@@ -34,10 +32,9 @@ export function useWebSocket() {
 
     ws.onopen = () => {
       setStatus('connected');
-      // Subscribe to all channels
       ws.send(JSON.stringify({
         type: 'subscribe',
-        channels: ['logs', 'trader_status', 'process_status', 'neural_signals', 'trades']
+        channels: ['logs', 'process_status', 'neural_signals']
       }));
     };
 
@@ -50,37 +47,25 @@ export function useWebSocket() {
             setProcessStatus(message.data as ProcessStatus);
             break;
 
-          case 'trader_status':
-            setTraderStatus(message.data as TraderStatus);
-            break;
-
           case 'log':
             if (message.source === 'trainer') {
               addTrainerLog(message.message || '');
-            } else if (message.source === 'runner' || message.source === 'trader') {
-              addLog(message.source, message.message || '');
+            } else if (message.source === 'runner') {
+              addLog('runner', message.message || '');
             }
-            break;
-
-          case 'trade_executed':
-            addTrade(message.data as Trade);
             break;
 
           case 'neural_signals':
             const signals = message.data as Record<string, NeuralSignal>;
-            Object.entries(signals).forEach(([coin, signal]) => {
-              setNeuralSignals(coin, signal.long_signal, signal.short_signal);
+            Object.entries(signals).forEach(([ticker, signal]) => {
+              setNeuralSignals(ticker, signal.long_signal, signal.short_signal);
             });
             break;
 
           case 'runner_ready':
-            // Runner ready is part of process status
-            break;
-
           case 'connected':
           case 'subscribed':
           case 'pong':
-            // Acknowledgement messages, no action needed
             break;
         }
       } catch (err) {
@@ -96,14 +81,13 @@ export function useWebSocket() {
       setStatus('disconnected');
       wsRef.current = null;
 
-      // Reconnect after 3 seconds
       reconnectTimeoutRef.current = window.setTimeout(() => {
         connect();
       }, 3000);
     };
 
     wsRef.current = ws;
-  }, [setProcessStatus, setTraderStatus, addLog, addTrade, setNeuralSignals, addTrainerLog]);
+  }, [setProcessStatus, addLog, setNeuralSignals, addTrainerLog]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {

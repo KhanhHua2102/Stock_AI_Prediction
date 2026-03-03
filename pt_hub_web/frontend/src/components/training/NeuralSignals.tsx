@@ -5,12 +5,11 @@ import { trainingApi } from '../../services/api';
 import { NeuralTile } from './NeuralTile';
 
 export function NeuralSignals() {
-  const { settings, setChartCoin, setActiveTab } = useSettingsStore();
+  const { settings, setChartTicker, setActiveTab } = useSettingsStore();
   const { neuralSignals, setAllNeuralSignals } = useTrainingStore();
 
-  const coins = settings?.coins ?? [];
+  const tickers = settings?.tickers ?? [];
 
-  // Load neural signals on mount and periodically
   useEffect(() => {
     const fetchSignals = () => {
       trainingApi.getNeuralSignals().then((data) => {
@@ -23,8 +22,8 @@ export function NeuralSignals() {
     return () => clearInterval(interval);
   }, [setAllNeuralSignals]);
 
-  const handleTileClick = (coin: string) => {
-    setChartCoin(coin);
+  const handleTileClick = (ticker: string) => {
+    setChartTicker(ticker);
     setActiveTab('charts');
   };
 
@@ -45,23 +44,23 @@ export function NeuralSignals() {
       </div>
 
       <div className="flex flex-wrap gap-3">
-        {coins.map((coin) => {
-          const signal = neuralSignals[coin] ?? { long_signal: 0, short_signal: 0 };
+        {tickers.map((ticker) => {
+          const signal = neuralSignals[ticker] ?? { long_signal: 0, short_signal: 0 };
           return (
             <NeuralTile
-              key={coin}
-              coin={coin}
+              key={ticker}
+              ticker={ticker}
               longSignal={signal.long_signal}
               shortSignal={signal.short_signal}
-              onClick={() => handleTileClick(coin)}
+              onClick={() => handleTileClick(ticker)}
             />
           );
         })}
       </div>
 
-      {coins.length === 0 && (
+      {tickers.length === 0 && (
         <div className="text-sm text-dark-muted text-center py-8">
-          No coins configured
+          No tickers configured
         </div>
       )}
     </div>

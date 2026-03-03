@@ -1,27 +1,27 @@
 import { useSettingsStore } from '../../store/settingsStore';
 
 export function ChartTabBar() {
-  const { settings, chartCoin, chartTimeframe, setChartCoin, setChartTimeframe } =
+  const { settings, chartTicker, chartTimeframe, setChartTicker, setChartTimeframe } =
     useSettingsStore();
 
-  const coins = settings?.coins ?? [];
+  const tickers = settings?.tickers ?? [];
   const timeframes = settings?.timeframes ?? [];
 
   return (
     <div className="flex items-center justify-between px-4 py-2 bg-dark-bg2 border-b border-dark-border">
-      {/* Coin Tabs */}
+      {/* Ticker Tabs */}
       <div className="flex gap-1 flex-wrap">
-        {coins.map((coin) => (
+        {tickers.map((ticker) => (
           <button
-            key={coin}
-            onClick={() => setChartCoin(coin)}
+            key={ticker}
+            onClick={() => setChartTicker(ticker)}
             className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-              chartCoin === coin
+              chartTicker === ticker
                 ? 'bg-dark-accent text-dark-bg'
                 : 'bg-dark-panel text-dark-muted hover:text-dark-fg hover:bg-dark-panel2'
             }`}
           >
-            {coin}
+            {ticker}
           </button>
         ))}
       </div>
