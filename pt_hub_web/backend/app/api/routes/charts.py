@@ -1,202 +1,114 @@
 from fastapi import APIRouter, HTTPException, Query
-import httpx
-from typing import List, Optional
-from datetime import datetime
-import time
+from typing import Optional
 
 from app.config import settings
 from app.services.file_watcher import file_watcher
 
 router = APIRouter()
 
-# BTCMarkets timeframe mapping
 TIMEFRAME_MAP = {
-    "1min": "1m",
-    "5min": "5m",
-    "15min": "15m",
-    "30min": "30m",
-    "1hour": "1h",
-    "4hour": "4h",
     "1day": "1d",
-    "1week": "1w",
+    "1week": "1wk",
 }
 
 
-@router.get("/candles/{coin}")
+@router.get("/candles/{ticker}")
 async def get_candles(
-    coin: str,
-    timeframe: str = Query(default="1hour"),
+    ticker: str,
+    timeframe: str = Query(default="1day"),
     limit: int = Query(default=120, le=1000),
 ):
-    """Get OHLC candle data from BTCMarkets API."""
-    if coin not in settings.coins:
-        raise HTTPException(status_code=400, detail=f"Invalid coin: {coin}")
+    """Get OHLC candle data via yfinance/vnstock."""
+    if ticker not in settings.tickers:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
 
     if timeframe not in TIMEFRAME_MAP:
         raise HTTPException(status_code=400, detail=f"Invalid timeframe: {timeframe}")
 
-    pair = f"{coin}-AUD"
-    tf = TIMEFRAME_MAP[timeframe]
-
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"https://api.btcmarkets.net/v3/markets/{pair}/candles",
-                params={"timeWindow": tf, "limit": limit},
-                timeout=10.0,
-            )
+        import yfinance as yf
 
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"BTCMarkets API error: {response.text}"
-            )
+        interval = TIMEFRAME_MAP[timeframe]
 
-        data = response.json()
+        # For VNINDEX, try vnstock first
+        if ticker == "VNINDEX":
+            candles = _fetch_vnindex_candles(limit)
+            if candles:
+                return {"candles": candles, "pair": ticker, "timeframe": timeframe}
 
-        # Transform to standard OHLC format
-        # BTCMarkets returns: [[timestamp_iso, open, high, low, close, volume], ...]
+        df = yf.download(ticker, period="2y", interval=interval, progress=False)
+        if df is None or df.empty:
+            return {"candles": [], "pair": ticker, "timeframe": timeframe}
+
         candles = []
-        for item in data:
+        for ts, row in df.tail(limit).iterrows():
             try:
-                ts = datetime.fromisoformat(item[0].replace("Z", "+00:00")).timestamp()
                 candles.append({
-                    "time": int(ts),
-                    "open": float(item[1]),
-                    "high": float(item[2]),
-                    "low": float(item[3]),
-                    "close": float(item[4]),
-                    "volume": float(item[5]) if len(item) > 5 else 0,
+                    "time": int(ts.timestamp()),
+                    "open": float(row["Open"].iloc[0]) if hasattr(row["Open"], "iloc") else float(row["Open"]),
+                    "high": float(row["High"].iloc[0]) if hasattr(row["High"], "iloc") else float(row["High"]),
+                    "low": float(row["Low"].iloc[0]) if hasattr(row["Low"], "iloc") else float(row["Low"]),
+                    "close": float(row["Close"].iloc[0]) if hasattr(row["Close"], "iloc") else float(row["Close"]),
+                    "volume": float(row["Volume"].iloc[0]) if hasattr(row["Volume"], "iloc") else float(row["Volume"]),
                 })
             except (IndexError, ValueError):
                 continue
 
-        # Sort by time ascending
         candles.sort(key=lambda x: x["time"])
+        return {"candles": candles, "pair": ticker, "timeframe": timeframe}
 
-        return {"candles": candles, "pair": pair, "timeframe": timeframe}
-
-    except httpx.RequestError as e:
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch candles: {e}")
 
 
-@router.get("/neural-levels/{coin}")
-async def get_neural_levels(coin: str):
+def _fetch_vnindex_candles(limit: int):
+    """Try fetching VNINDEX via vnstock."""
+    try:
+        from vnstock import Vnstock
+        from datetime import datetime, timedelta
+
+        stock = Vnstock().stock(symbol="VNINDEX", source="VCI")
+        start = (datetime.now() - timedelta(days=730)).strftime("%Y-%m-%d")
+        end = datetime.now().strftime("%Y-%m-%d")
+        df = stock.quote.history(start=start, end=end, interval="1D")
+
+        if df is None or df.empty:
+            return []
+
+        candles = []
+        for _, row in df.tail(limit).iterrows():
+            try:
+                time_val = row.get("time", row.get("date", row.get("trading_date", "")))
+                if hasattr(time_val, "timestamp"):
+                    ts = int(time_val.timestamp())
+                else:
+                    ts = int(datetime.strptime(str(time_val)[:10], "%Y-%m-%d").timestamp())
+                candles.append({
+                    "time": ts,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": float(row.get("volume", 0)),
+                })
+            except Exception:
+                continue
+        return candles
+    except Exception:
+        return []
+
+
+@router.get("/neural-levels/{ticker}")
+async def get_neural_levels(ticker: str):
     """Get neural price levels for chart overlays."""
-    if coin not in settings.coins:
-        raise HTTPException(status_code=400, detail=f"Invalid coin: {coin}")
+    if ticker not in settings.tickers:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
 
-    # Read neural level files (low_bound_prices.html, high_bound_prices.html)
-    # These are generated by pt_thinker.py
     levels = {"long": [], "short": []}
 
-    low_path = settings.project_dir / f"low_bound_prices_{coin}.html"
-    high_path = settings.project_dir / f"high_bound_prices_{coin}.html"
-
-    try:
-        if low_path.exists():
-            content = low_path.read_text()
-            # Parse prices from HTML (simple format: one price per line)
-            for line in content.split("\n"):
-                line = line.strip()
-                if line and line.replace(".", "").replace("-", "").isdigit():
-                    levels["long"].append(float(line))
-    except Exception:
-        pass
-
-    try:
-        if high_path.exists():
-            content = high_path.read_text()
-            for line in content.split("\n"):
-                line = line.strip()
-                if line and line.replace(".", "").replace("-", "").isdigit():
-                    levels["short"].append(float(line))
-    except Exception:
-        pass
-
-    return levels
-
-
-@router.get("/account-value")
-async def get_account_value_chart(
-    limit: int = Query(default=500),
-    holding: Optional[str] = Query(default=None, description="Filter by specific holding symbol"),
-):
-    """Get account value history for chart. Optionally filter by specific holding."""
-    history = file_watcher.read_account_history(limit)
-    trades = file_watcher.read_trade_history(limit)
-
-    # Format for charting
-    data_points = []
-    for entry in history:
-        ts = int(entry.get("ts", 0))
-        if holding:
-            # Return value for specific holding
-            holdings_dict = entry.get("holdings", {})
-            value = holdings_dict.get(holding, 0)
-        else:
-            # Return total account value
-            value = entry.get("total_account_value", 0)
-
-        data_points.append({
-            "time": ts,
-            "value": value,
-        })
-
-    # Format trade markers - filter by holding if specified
-    trade_markers = []
-    for trade in trades:
-        symbol = trade.get("symbol", "")
-        # If filtering by holding, only include trades for that holding
-        if holding and not symbol.startswith(holding):
-            continue
-
-        trade_markers.append({
-            "time": int(trade.get("ts", 0)),
-            "side": trade.get("side", ""),
-            "tag": trade.get("tag", ""),
-            "symbol": symbol,
-            "price": trade.get("price", 0),
-            "qty": trade.get("qty", 0),
-            "pnl": trade.get("realized_profit_aud", 0),
-        })
-
-    return {
-        "data": data_points,
-        "trades": trade_markers,
-    }
-
-
-@router.get("/holdings-list")
-async def get_holdings_list():
-    """Get list of all holdings that have history data."""
-    history = file_watcher.read_account_history(500)
-
-    # Collect all unique holdings from history
-    holdings_set = set()
-    for entry in history:
-        holdings_dict = entry.get("holdings", {})
-        holdings_set.update(holdings_dict.keys())
-
-    return {"holdings": sorted(list(holdings_set))}
-
-
-@router.get("/overlays/{coin}")
-async def get_chart_overlays(coin: str):
-    """Get all overlay data for a coin's chart."""
-    if coin not in settings.coins:
-        raise HTTPException(status_code=400, detail=f"Invalid coin: {coin}")
-
-    # Get current position data
-    status = file_watcher.read_trader_status()
-    position = {}
-    if status and "positions" in status:
-        position = status["positions"].get(coin, {})
-
-    # Get neural levels
-    levels = {"long": [], "short": []}
-    low_path = settings.project_dir / f"low_bound_prices_{coin}.html"
-    high_path = settings.project_dir / f"high_bound_prices_{coin}.html"
+    safe_name = ticker.upper().replace("^", "").replace(".", "_")
+    low_path = settings.project_dir / "data" / "training" / safe_name / "low_bound_prices.html"
+    high_path = settings.project_dir / "data" / "training" / safe_name / "high_bound_prices.html"
 
     try:
         if low_path.exists():
@@ -216,15 +128,43 @@ async def get_chart_overlays(coin: str):
     except Exception:
         pass
 
-    # Get recent trades for this coin
-    all_trades = file_watcher.read_trade_history(100)
-    coin_trades = [t for t in all_trades if t.get("symbol", "").startswith(coin)]
+    return levels
+
+
+@router.get("/overlays/{ticker}")
+async def get_chart_overlays(ticker: str):
+    """Get all overlay data for a ticker's chart."""
+    if ticker not in settings.tickers:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
+
+    levels = {"long": [], "short": []}
+    safe_name = ticker.upper().replace("^", "").replace(".", "_")
+    low_path = settings.project_dir / "data" / "training" / safe_name / "low_bound_prices.html"
+    high_path = settings.project_dir / "data" / "training" / safe_name / "high_bound_prices.html"
+
+    try:
+        if low_path.exists():
+            for line in low_path.read_text().split("\n"):
+                line = line.strip()
+                if line and line.replace(".", "").replace("-", "").isdigit():
+                    levels["long"].append(float(line))
+    except Exception:
+        pass
+
+    try:
+        if high_path.exists():
+            for line in high_path.read_text().split("\n"):
+                line = line.strip()
+                if line and line.replace(".", "").replace("-", "").isdigit():
+                    levels["short"].append(float(line))
+    except Exception:
+        pass
 
     return {
         "neural_levels": levels,
-        "ask_price": position.get("current_buy_price", 0),
-        "bid_price": position.get("current_sell_price", 0),
-        "trail_line": position.get("trail_line", 0),
-        "dca_line": position.get("dca_line_price", 0),
-        "trades": coin_trades,
+        "ask_price": 0,
+        "bid_price": 0,
+        "trail_line": 0,
+        "dca_line": 0,
+        "trades": [],
     }

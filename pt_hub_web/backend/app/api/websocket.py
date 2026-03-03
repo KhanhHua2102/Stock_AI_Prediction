@@ -104,12 +104,12 @@ def _schedule_broadcast(coro):
 
 
 # Register callbacks with process manager
-def on_log_message(source: str, message: str, coin: Optional[str] = None):
+def on_log_message(source: str, message: str, ticker: Optional[str] = None):
     """Callback for log messages from processes."""
     _schedule_broadcast(manager.broadcast("logs", {
         "type": "log",
         "source": source,
-        "coin": coin,
+        "ticker": ticker,
         "message": message,
     }))
 

@@ -9,10 +9,10 @@ interface NeuralSignalState {
 }
 
 interface TrainingState {
-  // Training status per coin
+  // Training status per ticker
   trainingStatus: Record<string, 'TRAINED' | 'TRAINING' | 'NOT_TRAINED'>;
 
-  // Neural signals per coin
+  // Neural signals per ticker
   neuralSignals: Record<string, NeuralSignalState>;
 
   // Trainer logs
@@ -23,8 +23,8 @@ interface TrainingState {
 
   // Actions
   setTrainingStatus: (status: Record<string, 'TRAINED' | 'TRAINING' | 'NOT_TRAINED'>) => void;
-  setCoinTrainingStatus: (coin: string, status: 'TRAINED' | 'TRAINING' | 'NOT_TRAINED') => void;
-  setNeuralSignals: (coin: string, longSignal: number, shortSignal: number) => void;
+  setTickerTrainingStatus: (ticker: string, status: 'TRAINED' | 'TRAINING' | 'NOT_TRAINED') => void;
+  setNeuralSignals: (ticker: string, longSignal: number, shortSignal: number) => void;
   setAllNeuralSignals: (signals: Record<string, NeuralSignal>) => void;
   addTrainerLog: (message: string) => void;
   clearTrainerLogs: () => void;
@@ -41,19 +41,19 @@ export const useTrainingStore = create<TrainingState>((set) => ({
   // Actions
   setTrainingStatus: (status) => set({ trainingStatus: status }),
 
-  setCoinTrainingStatus: (coin, status) =>
+  setTickerTrainingStatus: (ticker, status) =>
     set((state) => ({
       trainingStatus: {
         ...state.trainingStatus,
-        [coin]: status,
+        [ticker]: status,
       },
     })),
 
-  setNeuralSignals: (coin, longSignal, shortSignal) =>
+  setNeuralSignals: (ticker, longSignal, shortSignal) =>
     set((state) => ({
       neuralSignals: {
         ...state.neuralSignals,
-        [coin]: {
+        [ticker]: {
           long_signal: longSignal,
           short_signal: shortSignal,
         },
@@ -63,8 +63,8 @@ export const useTrainingStore = create<TrainingState>((set) => ({
   setAllNeuralSignals: (signals) =>
     set({
       neuralSignals: Object.fromEntries(
-        Object.entries(signals).map(([coin, signal]) => [
-          coin,
+        Object.entries(signals).map(([ticker, signal]) => [
+          ticker,
           { long_signal: signal.long_signal, short_signal: signal.short_signal },
         ])
       ),
@@ -81,11 +81,11 @@ export const useTrainingStore = create<TrainingState>((set) => ({
 }));
 
 // Selectors
-export const selectCoinTrainingStatus = (coin: string) => (state: TrainingState) =>
-  state.trainingStatus[coin] ?? 'NOT_TRAINED';
+export const selectTickerTrainingStatus = (ticker: string) => (state: TrainingState) =>
+  state.trainingStatus[ticker] ?? 'NOT_TRAINED';
 
-export const selectCoinNeuralSignals = (coin: string) => (state: TrainingState) =>
-  state.neuralSignals[coin] ?? { long_signal: 0, short_signal: 0 };
+export const selectTickerNeuralSignals = (ticker: string) => (state: TrainingState) =>
+  state.neuralSignals[ticker] ?? { long_signal: 0, short_signal: 0 };
 
-export const selectIsTraining = (coin: string) => (state: TrainingState) =>
-  state.runningTrainers.includes(coin);
+export const selectIsTraining = (ticker: string) => (state: TrainingState) =>
+  state.runningTrainers.includes(ticker);

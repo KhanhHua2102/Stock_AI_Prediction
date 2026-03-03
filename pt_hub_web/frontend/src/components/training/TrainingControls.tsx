@@ -11,35 +11,30 @@ export function TrainingControls() {
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const coins = settings?.coins ?? [];
+  const tickers = settings?.tickers ?? [];
   const trainers = processStatus?.trainers;
 
   const runningTrainers = useMemo(() => {
     return Object.keys(trainers ?? {}).filter(
-      (coin) => trainers?.[coin]?.running
+      (ticker) => trainers?.[ticker]?.running
     );
   }, [trainers]);
 
-  // Load training status on mount
   useEffect(() => {
     trainingApi.getStatus().then((data) => {
       setTrainingStatus(data.status);
     }).catch(() => {});
   }, [setTrainingStatus]);
 
-  // Update running trainers from process status
   useEffect(() => {
     setRunningTrainers(runningTrainers);
   }, [runningTrainers, setRunningTrainers]);
 
-  const handleTrain = async (coin: string) => {
-    setLoading(coin);
+  const handleTrain = async (ticker: string) => {
+    setLoading(ticker);
     setError(null);
     try {
-      const response = await trainingApi.start(coin);
-      console.log('[DEBUG] handleTrain response:', response);
-      console.log('[DEBUG] trainers in response:', response.process_status?.trainers);
-      // Update process status immediately from API response
+      const response = await trainingApi.start(ticker);
       if (response.process_status) {
         setProcessStatus(response.process_status);
       }
@@ -50,12 +45,11 @@ export function TrainingControls() {
     }
   };
 
-  const handleStop = async (coin: string) => {
-    setLoading(coin);
+  const handleStop = async (ticker: string) => {
+    setLoading(ticker);
     setError(null);
     try {
-      const response = await trainingApi.stop(coin);
-      // Update process status immediately from API response
+      const response = await trainingApi.stop(ticker);
       if (response.process_status) {
         setProcessStatus(response.process_status);
       }
@@ -66,12 +60,31 @@ export function TrainingControls() {
     }
   };
 
+  const allRunning = tickers.length > 0 && tickers.every((t) => runningTrainers.includes(t));
+
+  const handleTrainAll = async () => {
+    setLoading('train-all');
+    setError(null);
+    try {
+      for (const ticker of tickers) {
+        if (!runningTrainers.includes(ticker)) {
+          const response = await trainingApi.start(ticker);
+          if (response.process_status) {
+            setProcessStatus(response.process_status);
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start training');
+    }
+    setLoading(null);
+  };
+
   const handleClear = async () => {
     setLoading('clear');
     setError(null);
     try {
       await trainingApi.clear();
-      // Refresh status
       const data = await trainingApi.getStatus();
       setTrainingStatus(data.status);
     } catch (err) {
@@ -82,29 +95,37 @@ export function TrainingControls() {
 
   return (
     <div className="p-4">
-      <h3 className="text-sm font-semibold text-dark-fg mb-4">Training Controls</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-dark-fg">Training Controls</h3>
+        <button
+          onClick={handleTrainAll}
+          disabled={loading === 'train-all' || allRunning}
+          className="px-3 py-1 text-xs bg-dark-accent hover:bg-opacity-80 text-dark-bg rounded disabled:opacity-50"
+        >
+          {loading === 'train-all' ? 'Starting...' : 'Train All'}
+        </button>
+      </div>
 
-      {/* Coin Training Status */}
       <div className="space-y-3 mb-4">
-        {coins.map((coin) => {
-          const status = trainingStatus[coin] ?? 'NOT_TRAINED';
-          const isRunning = runningTrainers.includes(coin);
-          const isLoading = loading === coin;
+        {tickers.map((ticker) => {
+          const status = trainingStatus[ticker] ?? 'NOT_TRAINED';
+          const isRunning = runningTrainers.includes(ticker);
+          const isLoading = loading === ticker;
 
           return (
             <div
-              key={coin}
+              key={ticker}
               className="flex items-center justify-between p-3 bg-dark-panel rounded"
             >
               <div className="flex items-center gap-3">
-                <span className="font-medium text-dark-fg">{coin}</span>
+                <span className="font-medium text-dark-fg">{ticker}</span>
                 <StatusBadge status={isRunning ? 'TRAINING' : status} />
               </div>
 
               <div className="flex gap-2">
                 {isRunning ? (
                   <button
-                    onClick={() => handleStop(coin)}
+                    onClick={() => handleStop(ticker)}
                     disabled={isLoading}
                     className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
                   >
@@ -112,7 +133,7 @@ export function TrainingControls() {
                   </button>
                 ) : (
                   <button
-                    onClick={() => handleTrain(coin)}
+                    onClick={() => handleTrain(ticker)}
                     disabled={isLoading}
                     className="px-3 py-1 text-xs bg-dark-accent hover:bg-opacity-80 text-dark-bg rounded disabled:opacity-50"
                   >
@@ -125,7 +146,6 @@ export function TrainingControls() {
         })}
       </div>
 
-      {/* Clear Training Button */}
       <button
         onClick={handleClear}
         disabled={loading === 'clear'}
@@ -136,9 +156,8 @@ export function TrainingControls() {
 
       {error && <div className="mt-3 text-xs text-red-500">{error}</div>}
 
-      {/* Hint */}
       <div className="mt-4 text-xs text-dark-muted">
-        Flow: Train coins → Start All (in Trade tab)
+        Flow: Train tickers → Start All (in Trade tab)
       </div>
     </div>
   );

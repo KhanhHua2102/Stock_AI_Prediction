@@ -5,32 +5,32 @@ import { tradingApi } from '../../services/api';
 
 export function TradeControls() {
   const { settings } = useSettingsStore();
-  const { selectedCoins, setSelectedCoins, processStatus } = useTradeStore();
+  const { selectedTickers, setSelectedTickers, processStatus } = useTradeStore();
   const [loading, setLoading] = useState(false);
 
-  const coins = settings?.coins ?? [];
-  const isRunning = processStatus?.neural.running || processStatus?.trader.running;
+  const tickers = settings?.tickers ?? [];
+  const isRunning = processStatus?.neural.running;
 
-  // Load selected coins on mount
+  // Load selected tickers on mount
   useEffect(() => {
-    tradingApi.getCoins().then((data) => {
-      setSelectedCoins(data.coins);
+    tradingApi.getTickers().then((data) => {
+      setSelectedTickers(data.tickers);
     }).catch(() => {});
-  }, [setSelectedCoins]);
+  }, [setSelectedTickers]);
 
-  const handleCoinToggle = async (coin: string) => {
-    if (isRunning) return; // Can't change while running
+  const handleTickerToggle = async (ticker: string) => {
+    if (isRunning) return;
 
-    const newSelection = selectedCoins.includes(coin)
-      ? selectedCoins.filter((c) => c !== coin)
-      : [...selectedCoins, coin];
+    const newSelection = selectedTickers.includes(ticker)
+      ? selectedTickers.filter((t) => t !== ticker)
+      : [...selectedTickers, ticker];
 
     setLoading(true);
     try {
-      await tradingApi.setCoins(newSelection);
-      setSelectedCoins(newSelection);
+      await tradingApi.setTickers(newSelection);
+      setSelectedTickers(newSelection);
     } catch (err) {
-      console.error('Failed to update coins:', err);
+      console.error('Failed to update tickers:', err);
     }
     setLoading(false);
   };
@@ -39,8 +39,8 @@ export function TradeControls() {
     if (isRunning) return;
     setLoading(true);
     try {
-      await tradingApi.setCoins(coins);
-      setSelectedCoins(coins);
+      await tradingApi.setTickers(tickers);
+      setSelectedTickers(tickers);
     } catch (err) {
       console.error('Failed to select all:', err);
     }
@@ -51,8 +51,8 @@ export function TradeControls() {
     if (isRunning) return;
     setLoading(true);
     try {
-      await tradingApi.setCoins([]);
-      setSelectedCoins([]);
+      await tradingApi.setTickers([]);
+      setSelectedTickers([]);
     } catch (err) {
       console.error('Failed to clear selection:', err);
     }
@@ -61,12 +61,12 @@ export function TradeControls() {
 
   return (
     <div className="p-4">
-      <h3 className="text-sm font-semibold text-dark-fg mb-3">Trade Controls</h3>
+      <h3 className="text-sm font-semibold text-dark-fg mb-3">Ticker Selection</h3>
 
-      {/* Coin Selection */}
+      {/* Ticker Selection */}
       <div className="mb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-dark-muted">Select Coins</span>
+          <span className="text-xs text-dark-muted">Select Tickers</span>
           <div className="flex gap-2">
             <button
               onClick={handleSelectAll}
@@ -86,21 +86,21 @@ export function TradeControls() {
         </div>
 
         <div className="space-y-1">
-          {coins.map((coin) => (
+          {tickers.map((ticker) => (
             <label
-              key={coin}
+              key={ticker}
               className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
                 isRunning ? 'opacity-50 cursor-not-allowed' : 'hover:bg-dark-panel2'
               }`}
             >
               <input
                 type="checkbox"
-                checked={selectedCoins.includes(coin)}
-                onChange={() => handleCoinToggle(coin)}
+                checked={selectedTickers.includes(ticker)}
+                onChange={() => handleTickerToggle(ticker)}
                 disabled={isRunning || loading}
                 className="w-4 h-4 rounded border-dark-border bg-dark-panel text-dark-accent focus:ring-dark-accent focus:ring-offset-0"
               />
-              <span className="text-sm text-dark-fg">{coin}</span>
+              <span className="text-sm text-dark-fg">{ticker}</span>
             </label>
           ))}
         </div>
@@ -109,13 +109,13 @@ export function TradeControls() {
       {/* Status message */}
       {isRunning && (
         <div className="text-xs text-yellow-500">
-          Cannot change coins while trading is active
+          Cannot change tickers while runner is active
         </div>
       )}
 
-      {selectedCoins.length === 0 && !isRunning && (
+      {selectedTickers.length === 0 && !isRunning && (
         <div className="text-xs text-dark-muted">
-          Select at least one coin to start trading
+          Select at least one ticker to start predictions
         </div>
       )}
     </div>

@@ -149,26 +149,25 @@ class FileWatcher:
             pass
         return history
 
-    def read_selected_coins(self) -> List[str]:
+    def read_selected_tickers(self) -> List[str]:
         """Read selected_trading_coins.json."""
         path = self.hub_data_dir / "selected_trading_coins.json"
         try:
             if path.exists():
                 data = json.loads(path.read_text())
-                return data.get("coins", [])
+                return data.get("tickers", data.get("coins", []))
         except Exception:
             pass
         return []
 
-    def write_selected_coins(self, coins: List[str]):
+    def write_selected_tickers(self, tickers: List[str]):
         """Write selected_trading_coins.json."""
         path = self.hub_data_dir / "selected_trading_coins.json"
-        path.write_text(json.dumps({"coins": coins}))
+        path.write_text(json.dumps({"tickers": tickers}))
 
-    def read_neural_signals(self, coin: str) -> Optional[dict]:
-        """Read neural signal levels for a coin."""
-        # Neural signals are stored in coin-specific files
-        signal_path = self.hub_data_dir / f"neural_signal_{coin}.json"
+    def read_neural_signals(self, ticker: str) -> Optional[dict]:
+        """Read neural signal levels for a ticker."""
+        signal_path = self.hub_data_dir / f"neural_signal_{ticker}.json"
         try:
             if signal_path.exists():
                 return json.loads(signal_path.read_text())
@@ -176,27 +175,22 @@ class FileWatcher:
             pass
         return None
 
-    def get_training_status(self, coin: str) -> str:
-        """Check if a coin has trained models."""
-        # Check for training data directory with memory weights files
-        training_dir = settings.project_dir / "data" / "training"
+    def get_training_status(self, ticker: str) -> str:
+        """Check if a ticker has trained models."""
+        safe_ticker = ticker.replace("^", "").replace(".", "_")
+        ticker_dir = settings.project_dir / "data" / "training" / safe_ticker
 
-        # Check if trainer_status.json shows FINISHED state
-        status_file = training_dir / "trainer_status.json"
+        status_file = ticker_dir / "trainer_status.json"
         if status_file.exists():
             try:
                 status_data = json.loads(status_file.read_text())
-                if status_data.get("state") == "FINISHED" and status_data.get("coin") == coin:
+                if status_data.get("state") == "FINISHED":
                     return "TRAINED"
             except Exception:
                 pass
 
-        # Also check for memory_weights files as indicator of completed training
-        if training_dir.exists() and any(training_dir.glob("memory_weights_*.txt")):
-            # Check if trainer_last_training_time.txt exists (indicates training completed)
-            last_training_file = training_dir / "trainer_last_training_time.txt"
-            if last_training_file.exists():
-                return "TRAINED"
+        if ticker_dir.exists() and any(ticker_dir.glob("memory_weights_*.txt")):
+            return "TRAINED"
 
         return "NOT_TRAINED"
 

@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from fastapi import APIRouter, HTTPException
 from typing import Dict
 
@@ -11,54 +12,53 @@ router = APIRouter()
 
 @router.get("/status")
 async def get_training_status():
-    """Get training status for all coins."""
+    """Get training status for all tickers."""
     statuses: Dict[str, str] = {}
-    for coin in settings.coins:
-        statuses[coin] = file_watcher.get_training_status(coin)
+    for ticker in settings.tickers:
+        statuses[ticker] = file_watcher.get_training_status(ticker)
 
     # Add running trainers
     process_status = process_manager.get_status()
-    for coin, trainer_info in process_status.get("trainers", {}).items():
+    for ticker, trainer_info in process_status.get("trainers", {}).items():
         if trainer_info.get("running"):
-            statuses[coin] = "TRAINING"
+            statuses[ticker] = "TRAINING"
 
     return {"status": statuses}
 
 
-@router.post("/start/{coin}")
-async def start_training(coin: str):
-    """Start training for a specific coin."""
-    if coin not in settings.coins:
-        raise HTTPException(status_code=400, detail=f"Invalid coin: {coin}")
+@router.post("/start/{ticker}")
+async def start_training(ticker: str):
+    """Start training for a specific ticker."""
+    if ticker not in settings.tickers:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
 
-    if process_manager.start_trainer(coin):
+    if process_manager.start_trainer(ticker):
         # Wait a bit and check if process is still running
         await asyncio.sleep(0.5)
         status = process_manager.get_status()
-        trainer_info = status.get("trainers", {}).get(coin, {})
-        print(f"[DEBUG] start_training({coin}) - trainer_info: {trainer_info}")
+        trainer_info = status.get("trainers", {}).get(ticker, {})
+        print(f"[DEBUG] start_training({ticker}) - trainer_info: {trainer_info}")
 
         # If process crashed, try to get error from logs
         if not trainer_info.get("running"):
-            logs = process_manager.get_logs("trainer", 10, coin)
+            logs = process_manager.get_logs("trainer", 10, ticker)
             print(f"[DEBUG] Trainer logs: {logs}")
 
         return {
             "status": "started",
-            "coin": coin,
+            "ticker": ticker,
             "process_status": status
         }
     raise HTTPException(status_code=400, detail="Failed to start or already running")
 
 
-@router.post("/stop/{coin}")
-async def stop_training(coin: str):
-    """Stop training for a specific coin."""
-    if process_manager.stop_trainer(coin):
-        # Return process status so frontend can update immediately
+@router.post("/stop/{ticker}")
+async def stop_training(ticker: str):
+    """Stop training for a specific ticker."""
+    if process_manager.stop_trainer(ticker):
         return {
             "status": "stopped",
-            "coin": coin,
+            "ticker": ticker,
             "process_status": process_manager.get_status()
         }
     raise HTTPException(status_code=400, detail="Not running")
@@ -66,43 +66,48 @@ async def stop_training(coin: str):
 
 @router.post("/clear")
 async def clear_training():
-    """Clear all training data (stop trainers and optionally remove models)."""
-    # Stop all trainers
+    """Clear all training data — stop trainers and remove training dirs."""
     process_status = process_manager.get_status()
-    for coin in list(process_status.get("trainers", {}).keys()):
-        process_manager.stop_trainer(coin)
+    for ticker in list(process_status.get("trainers", {}).keys()):
+        process_manager.stop_trainer(ticker)
+
+    training_dir = settings.project_dir / "data" / "training"
+    if training_dir.exists():
+        for child in training_dir.iterdir():
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
 
     return {"status": "cleared"}
 
 
 @router.get("/neural-signals")
 async def get_neural_signals():
-    """Get neural signal levels for all coins."""
+    """Get neural signal levels for all tickers."""
     signals: Dict[str, dict] = {}
-    for coin in settings.coins:
-        signal_data = file_watcher.read_neural_signals(coin)
+    for ticker in settings.tickers:
+        signal_data = file_watcher.read_neural_signals(ticker)
         if signal_data:
-            signals[coin] = signal_data
+            signals[ticker] = signal_data
         else:
-            signals[coin] = {"long_signal": 0, "short_signal": 0}
+            signals[ticker] = {"long_signal": 0, "short_signal": 0}
 
     return {"signals": signals}
 
 
-@router.get("/neural-signals/{coin}")
-async def get_coin_neural_signals(coin: str):
-    """Get neural signal levels for a specific coin."""
-    if coin not in settings.coins:
-        raise HTTPException(status_code=400, detail=f"Invalid coin: {coin}")
+@router.get("/neural-signals/{ticker}")
+async def get_ticker_neural_signals(ticker: str):
+    """Get neural signal levels for a specific ticker."""
+    if ticker not in settings.tickers:
+        raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
 
-    signal_data = file_watcher.read_neural_signals(coin)
+    signal_data = file_watcher.read_neural_signals(ticker)
     if signal_data:
         return signal_data
     return {"long_signal": 0, "short_signal": 0}
 
 
-@router.get("/logs/{coin}")
-async def get_trainer_logs(coin: str, limit: int = 100):
-    """Get training logs for a specific coin."""
-    logs = process_manager.get_logs("trainer", limit, coin)
-    return {"logs": logs, "coin": coin}
+@router.get("/logs/{ticker}")
+async def get_trainer_logs(ticker: str, limit: int = 100):
+    """Get training logs for a specific ticker."""
+    logs = process_manager.get_logs("trainer", limit, ticker)
+    return {"logs": logs, "ticker": ticker}

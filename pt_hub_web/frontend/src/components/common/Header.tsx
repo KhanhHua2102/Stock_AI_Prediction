@@ -12,7 +12,6 @@ export function Header({ connectionStatus }: HeaderProps) {
   const [error, setError] = useState<string | null>(null);
 
   const neuralRunning = processStatus?.neural.running ?? false;
-  const traderRunning = processStatus?.trader.running ?? false;
   const runnerReady = processStatus?.runner_ready;
 
   const handleStartAll = async () => {
@@ -40,24 +39,23 @@ export function Header({ connectionStatus }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-4 py-3 bg-dark-bg2 border-b border-dark-border">
       <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold text-dark-fg">PowerTrader Hub</h1>
+        <h1 className="text-lg font-semibold text-dark-fg">Stock AI Prediction</h1>
       </div>
 
       <div className="flex items-center gap-4">
         {/* Process Status Indicators */}
         <div className="flex items-center gap-3">
-          <StatusBadge label="Neural" running={neuralRunning} />
-          <StatusBadge label="Trader" running={traderRunning} />
+          <StatusBadge label="Runner" running={neuralRunning} />
           {runnerReady && !runnerReady.ready && neuralRunning && (
             <span className="text-xs text-yellow-500">
-              {runnerReady.stage} ({runnerReady.ready_coins.length}/{runnerReady.total_coins})
+              {runnerReady.stage} ({runnerReady.ready_tickers.length}/{runnerReady.total_tickers})
             </span>
           )}
         </div>
 
         {/* Start/Stop Button */}
         <div className="flex items-center gap-2">
-          {neuralRunning || traderRunning ? (
+          {neuralRunning ? (
             <button
               onClick={handleStopAll}
               disabled={loading}

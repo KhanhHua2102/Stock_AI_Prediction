@@ -19,8 +19,8 @@ def get_python_executable() -> str:
 
     Prefers the project's venv Python which has all required dependencies.
     """
-    # Try project venv first
-    project_venv = Path(__file__).parent.parent.parent.parent / "venv" / "bin" / "python"
+    # Try project venv first (project root, not pt_hub_web)
+    project_venv = settings.project_dir / "venv" / "bin" / "python"
     if project_venv.exists():
         return str(project_venv)
 
@@ -50,7 +50,7 @@ class ProcessInfo:
 
 class ProcessManager:
     """
-    Manages pt_trader.py, pt_thinker.py, and pt_trainer.py processes.
+    Manages pt_thinker.py and pt_trainer.py processes.
     Mirrors subprocess management from pt_hub.py.
     """
 
@@ -60,7 +60,7 @@ class ProcessManager:
 
         # Process handles
         self.neural: ProcessInfo = ProcessInfo()
-        self.trader: ProcessInfo = ProcessInfo()
+        # self.trader removed — no trading execution in stock prediction mode
         self.trainers: Dict[str, ProcessInfo] = {}
 
         # Callbacks for WebSocket broadcasting
@@ -75,11 +75,11 @@ class ProcessManager:
         """Register callback for status changes."""
         self._status_callbacks.append(callback)
 
-    def _broadcast_log(self, source: str, message: str, coin: Optional[str] = None):
+    def _broadcast_log(self, source: str, message: str, ticker: Optional[str] = None):
         """Broadcast log message to all registered callbacks."""
         for callback in self._log_callbacks:
             try:
-                callback(source, message, coin)
+                callback(source, message, ticker)
             except Exception:
                 pass
 
@@ -92,7 +92,7 @@ class ProcessManager:
             except Exception:
                 pass
 
-    def _read_process_output(self, proc_info: ProcessInfo, source: str, coin: Optional[str] = None):
+    def _read_process_output(self, proc_info: ProcessInfo, source: str, ticker: Optional[str] = None):
         """Read process stdout and broadcast lines."""
         process = proc_info.process
         if not process or not process.stdout:
@@ -103,7 +103,7 @@ class ProcessManager:
                 break
             line = line.rstrip("\n\r")
             proc_info.log_queue.put(line)
-            self._broadcast_log(source, line, coin)
+            self._broadcast_log(source, line, ticker)
 
     def _reset_runner_ready(self):
         """Reset runner_ready.json before starting neural runner."""
@@ -112,8 +112,8 @@ class ProcessManager:
             ready_path.write_text(json.dumps({
                 "ready": False,
                 "stage": "starting",
-                "ready_coins": [],
-                "total_coins": len(settings.coins)
+                "ready_tickers": [],
+                "total_tickers": len(settings.tickers)
             }))
         except Exception:
             pass
@@ -181,67 +181,14 @@ class ProcessManager:
         self._broadcast_status()
         return True
 
-    def start_trader(self) -> bool:
-        """Start pt_trader.py."""
-        if self.trader.running:
+    def start_trainer(self, ticker: str) -> bool:
+        """Start pt_trainer.py for a specific ticker."""
+        if ticker in self.trainers and self.trainers[ticker].running:
             return False
 
         env = os.environ.copy()
         env["POWERTRADER_HUB_DIR"] = str(self.hub_data_dir)
-
-        script_path = self.project_dir / settings.script_trader
-        if not script_path.exists():
-            return False
-
-        try:
-            self.trader.process = subprocess.Popen(
-                [get_python_executable(), "-u", str(script_path)],
-                cwd=str(self.project_dir),
-                env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-
-            self.trader.reader_thread = threading.Thread(
-                target=self._read_process_output,
-                args=(self.trader, "trader"),
-                daemon=True
-            )
-            self.trader.reader_thread.start()
-
-            self._broadcast_status()
-            return True
-        except Exception as e:
-            self._broadcast_log("trader", f"Failed to start: {e}")
-            return False
-
-    def stop_trader(self) -> bool:
-        """Stop trader process."""
-        if not self.trader.running:
-            return False
-
-        try:
-            self.trader.process.terminate()
-            self.trader.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.trader.process.kill()
-        except Exception:
-            pass
-
-        self.trader.process = None
-        self._broadcast_status()
-        return True
-
-    def start_trainer(self, coin: str) -> bool:
-        """Start pt_trainer.py for a specific coin."""
-        if coin in self.trainers and self.trainers[coin].running:
-            return False
-
-        env = os.environ.copy()
-        env["POWERTRADER_HUB_DIR"] = str(self.hub_data_dir)
-        env["TRAIN_COIN"] = coin
+        env["TRAIN_COIN"] = ticker
 
         script_path = self.project_dir / settings.script_trainer
         if not script_path.exists():
@@ -250,7 +197,7 @@ class ProcessManager:
         try:
             proc_info = ProcessInfo()
             proc_info.process = subprocess.Popen(
-                [get_python_executable(), "-u", str(script_path), coin],
+                [get_python_executable(), "-u", str(script_path), ticker],
                 cwd=str(self.project_dir),
                 env=env,
                 stdout=subprocess.PIPE,
@@ -261,41 +208,40 @@ class ProcessManager:
 
             proc_info.reader_thread = threading.Thread(
                 target=self._read_process_output,
-                args=(proc_info, "trainer", coin),
+                args=(proc_info, "trainer", ticker),
                 daemon=True
             )
             proc_info.reader_thread.start()
 
-            self.trainers[coin] = proc_info
+            self.trainers[ticker] = proc_info
             self._broadcast_status()
             return True
         except Exception as e:
-            self._broadcast_log("trainer", f"Failed to start trainer for {coin}: {e}", coin)
+            self._broadcast_log("trainer", f"Failed to start trainer for {ticker}: {e}", ticker)
             return False
 
-    def stop_trainer(self, coin: str) -> bool:
-        """Stop trainer for a specific coin."""
-        if coin not in self.trainers or not self.trainers[coin].running:
+    def stop_trainer(self, ticker: str) -> bool:
+        """Stop trainer for a specific ticker."""
+        if ticker not in self.trainers or not self.trainers[ticker].running:
             return False
 
         try:
-            self.trainers[coin].process.terminate()
-            self.trainers[coin].process.wait(timeout=5)
+            self.trainers[ticker].process.terminate()
+            self.trainers[ticker].process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            self.trainers[coin].process.kill()
+            self.trainers[ticker].process.kill()
         except Exception:
             pass
 
-        del self.trainers[coin]
+        del self.trainers[ticker]
         self._broadcast_status()
         return True
 
     def stop_all(self):
         """Stop all running processes."""
         self.stop_neural()
-        self.stop_trader()
-        for coin in list(self.trainers.keys()):
-            self.stop_trainer(coin)
+        for ticker in list(self.trainers.keys()):
+            self.stop_trainer(ticker)
 
     def get_runner_ready(self) -> dict:
         """Read runner_ready.json to check neural runner status."""
@@ -308,8 +254,8 @@ class ProcessManager:
         return {
             "ready": False,
             "stage": "unknown",
-            "ready_coins": [],
-            "total_coins": 0
+            "ready_tickers": [],
+            "total_tickers": 0
         }
 
     async def wait_for_runner_ready(self, timeout: float = 60.0) -> bool:
@@ -329,29 +275,23 @@ class ProcessManager:
                 "running": self.neural.running,
                 "pid": self.neural.pid
             },
-            "trader": {
-                "running": self.trader.running,
-                "pid": self.trader.pid
-            },
             "trainers": {
-                coin: {
+                ticker: {
                     "running": info.running,
                     "pid": info.pid
                 }
-                for coin, info in self.trainers.items()
+                for ticker, info in self.trainers.items()
             },
             "runner_ready": self.get_runner_ready()
         }
 
-    def get_logs(self, source: str, limit: int = 100, coin: Optional[str] = None) -> List[str]:
+    def get_logs(self, source: str, limit: int = 100, ticker: Optional[str] = None) -> List[str]:
         """Get recent logs from a process."""
         logs = []
         if source == "runner":
             q = self.neural.log_queue
-        elif source == "trader":
-            q = self.trader.log_queue
-        elif source == "trainer" and coin and coin in self.trainers:
-            q = self.trainers[coin].log_queue
+        elif source == "trainer" and ticker and ticker in self.trainers:
+            q = self.trainers[ticker].log_queue
         else:
             return logs
 

@@ -5,10 +5,10 @@ import { chartsApi } from '../../services/api';
 import type { Candle, ChartOverlays } from '../../services/types';
 
 interface CandlestickChartProps {
-  coin: string;
+  ticker: string;
 }
 
-export function CandlestickChart({ coin }: CandlestickChartProps) {
+export function CandlestickChart({ ticker }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -17,7 +17,6 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize chart
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -40,16 +39,8 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
       },
       crosshair: {
         mode: 1,
-        vertLine: {
-          color: '#8B949E',
-          width: 1,
-          style: 2,
-        },
-        horzLine: {
-          color: '#8B949E',
-          width: 1,
-          style: 2,
-        },
+        vertLine: { color: '#8B949E', width: 1, style: 2 },
+        horzLine: { color: '#8B949E', width: 1, style: 2 },
       },
     });
 
@@ -62,7 +53,6 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
       wickDownColor: '#FF4444',
     });
 
-    // Handle resize
     const handleResize = () => {
       if (chartRef.current && containerRef.current) {
         chartRef.current.applyOptions({
@@ -81,7 +71,6 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
     };
   }, []);
 
-  // Fetch data when coin or timeframe changes
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -89,12 +78,11 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
 
       try {
         const [candleData, overlayData] = await Promise.all([
-          chartsApi.getCandles(coin, chartTimeframe, settings?.candles_limit ?? 120),
-          chartsApi.getOverlays(coin),
+          chartsApi.getCandles(ticker, chartTimeframe, settings?.candles_limit ?? 120),
+          chartsApi.getOverlays(ticker),
         ]);
 
         if (candleSeriesRef.current) {
-          // Set candle data
           const formattedCandles: CandlestickData<Time>[] = candleData.candles.map((c: Candle) => ({
             time: c.time as Time,
             open: c.open,
@@ -103,29 +91,7 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
             close: c.close,
           }));
           candleSeriesRef.current.setData(formattedCandles);
-
-          // Clear existing price lines
-          // Note: lightweight-charts doesn't have a direct way to remove all price lines
-          // We create a new series or use markers instead
-
-          // Add overlay price lines
           addOverlays(overlayData);
-
-          // Add trade markers
-          if (overlayData.trades && overlayData.trades.length > 0) {
-            const markers = overlayData.trades.map((trade) => ({
-              time: trade.ts as Time,
-              position: trade.side === 'buy' ? 'belowBar' as const : 'aboveBar' as const,
-              color: trade.side === 'buy'
-                ? trade.tag === 'DCA' ? '#A855F7' : '#EF4444'
-                : '#00FF66',
-              shape: trade.side === 'buy' ? 'arrowUp' as const : 'arrowDown' as const,
-              text: trade.tag === 'DCA' ? 'DCA' : trade.side.toUpperCase(),
-            }));
-            candleSeriesRef.current.setMarkers(markers);
-          }
-
-          // Fit content
           chartRef.current?.timeScale().fitContent();
         }
       } catch (err) {
@@ -137,85 +103,50 @@ export function CandlestickChart({ coin }: CandlestickChartProps) {
 
     fetchData();
 
-    // Refresh periodically
     const interval = setInterval(fetchData, (settings?.chart_refresh_seconds ?? 10) * 1000);
     return () => clearInterval(interval);
-  }, [coin, chartTimeframe, settings]);
+  }, [ticker, chartTimeframe, settings]);
 
   const addOverlays = (overlays: ChartOverlays) => {
     if (!candleSeriesRef.current) return;
 
-    // Neural levels - Long (blue)
     overlays.neural_levels.long.forEach((price) => {
       if (price > 0) {
         candleSeriesRef.current?.createPriceLine({
-          price,
-          color: '#3B82F6',
-          lineWidth: 1,
-          lineStyle: 0,
-          axisLabelVisible: false,
+          price, color: '#3B82F6', lineWidth: 1, lineStyle: 0, axisLabelVisible: false,
         });
       }
     });
 
-    // Neural levels - Short (orange)
     overlays.neural_levels.short.forEach((price) => {
       if (price > 0) {
         candleSeriesRef.current?.createPriceLine({
-          price,
-          color: '#F97316',
-          lineWidth: 1,
-          lineStyle: 0,
-          axisLabelVisible: false,
+          price, color: '#F97316', lineWidth: 1, lineStyle: 0, axisLabelVisible: false,
         });
       }
     });
 
-    // Trail line (green)
     if (overlays.trail_line > 0) {
       candleSeriesRef.current?.createPriceLine({
-        price: overlays.trail_line,
-        color: '#00FF66',
-        lineWidth: 2,
-        lineStyle: 0,
-        title: 'SELL',
-        axisLabelVisible: true,
+        price: overlays.trail_line, color: '#00FF66', lineWidth: 2, lineStyle: 0, title: 'SELL', axisLabelVisible: true,
       });
     }
 
-    // DCA line (red)
     if (overlays.dca_line > 0) {
       candleSeriesRef.current?.createPriceLine({
-        price: overlays.dca_line,
-        color: '#EF4444',
-        lineWidth: 2,
-        lineStyle: 0,
-        title: 'DCA',
-        axisLabelVisible: true,
+        price: overlays.dca_line, color: '#EF4444', lineWidth: 2, lineStyle: 0, title: 'DCA', axisLabelVisible: true,
       });
     }
 
-    // Ask price (purple)
     if (overlays.ask_price > 0) {
       candleSeriesRef.current?.createPriceLine({
-        price: overlays.ask_price,
-        color: '#A855F7',
-        lineWidth: 1,
-        lineStyle: 2,
-        title: 'ASK',
-        axisLabelVisible: true,
+        price: overlays.ask_price, color: '#A855F7', lineWidth: 1, lineStyle: 2, title: 'ASK', axisLabelVisible: true,
       });
     }
 
-    // Bid price (teal)
     if (overlays.bid_price > 0) {
       candleSeriesRef.current?.createPriceLine({
-        price: overlays.bid_price,
-        color: '#14B8A6',
-        lineWidth: 1,
-        lineStyle: 2,
-        title: 'BID',
-        axisLabelVisible: true,
+        price: overlays.bid_price, color: '#14B8A6', lineWidth: 1, lineStyle: 2, title: 'BID', axisLabelVisible: true,
       });
     }
   };
