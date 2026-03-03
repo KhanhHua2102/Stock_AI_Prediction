@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --dark-bg: #070B10;
+  --dark-bg2: #0B1220;
+  --dark-panel: #0E1626;
+  --dark-panel2: #121C2F;
+  --dark-border: #243044;
+  --dark-fg: #C7D1DB;
+  --dark-muted: #8B949E;
+  --dark-accent: #00FF66;
+  --dark-accent2: #00E5FF;
+  --dark-select: #17324A;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--dark-bg);
+  color: var(--dark-fg);
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--dark-bg2);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--dark-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--dark-muted);
+}
+
+/* Custom classes */
+.text-accent {
+  color: var(--dark-accent);
+}
+
+.text-accent2 {
+  color: var(--dark-accent2);
+}
+
+.bg-panel {
+  background-color: var(--dark-panel);
+}
+
+.border-dark {
+  border-color: var(--dark-border);
+}
+
+/* Log viewer */
+.log-viewer {
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Table styling */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--dark-border);
+}
+
+.data-table th {
+  background-color: var(--dark-bg2);
+  color: var(--dark-muted);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.data-table tr:hover {
+  background-color: var(--dark-panel2);
+}
+
+/* Button styling */
+.btn {
+  @apply px-4 py-2 rounded font-medium transition-colors;
+}
+
+.btn-primary {
+  @apply bg-dark-accent text-dark-bg hover:bg-opacity-80;
+}
+
+.btn-secondary {
+  @apply bg-dark-panel2 text-dark-fg border border-dark-border hover:bg-dark-select;
+}
+
+.btn-danger {
+  @apply bg-red-600 text-white hover:bg-red-700;
+}
+
+/* Status indicators */
+.status-dot {
+  @apply w-2 h-2 rounded-full inline-block mr-2;
+}
+
+.status-dot.running {
+  @apply bg-dark-accent animate-pulse;
+}
+
+.status-dot.stopped {
+  @apply bg-dark-muted;
+}

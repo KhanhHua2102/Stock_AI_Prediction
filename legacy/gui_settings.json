@@ -1,0 +1,28 @@
+{
+  "main_neural_dir": "/Users/KhanhHua/Documents/Coding/Crypto_Trading_PowerTrade",
+  "coins": [
+    "BTC"
+  ],
+  "default_timeframe": "1hour",
+  "timeframes": [
+    "1min",
+    "5min",
+    "15min",
+    "30min",
+    "1hour",
+    "2hour",
+    "4hour",
+    "8hour",
+    "12hour",
+    "1day",
+    "1week"
+  ],
+  "candles_limit": 120,
+  "ui_refresh_seconds": 1.0,
+  "chart_refresh_seconds": 10.0,
+  "hub_data_dir": "",
+  "script_neural_runner2": "legacy/pt_thinker.py",
+  "script_neural_trainer": "legacy/pt_trainer.py",
+  "script_trader": "legacy/pt_trader.py",
+  "auto_start_scripts": false
+}

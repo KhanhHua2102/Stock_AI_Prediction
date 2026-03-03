@@ -1,0 +1,33 @@
+{
+  "timestamp": 1768488789.899286,
+  "account": {
+    "total_account_value": 60.0092,
+    "buying_power": 60.0092,
+    "holdings_sell_value": 0.0,
+    "holdings_buy_value": 0.0,
+    "percent_in_trade": 0.0,
+    "pm_start_pct_no_dca": 5.0,
+    "pm_start_pct_with_dca": 2.5,
+    "trailing_gap_pct": 0.5
+  },
+  "positions": {
+    "BTC": {
+      "quantity": 0.0,
+      "avg_cost_basis": 0.0,
+      "current_buy_price": 143671.73,
+      "current_sell_price": 143451.25,
+      "gain_loss_pct_buy": 0.0,
+      "gain_loss_pct_sell": 0.0,
+      "value_usd": 0.0,
+      "dca_triggered_stages": 0,
+      "next_dca_display": "",
+      "dca_line_price": 0.0,
+      "dca_line_source": "N/A",
+      "dca_line_pct": 0.0,
+      "trail_active": false,
+      "trail_line": 0.0,
+      "trail_peak": 0.0,
+      "dist_to_trail_pct": 0.0
+    }
+  }
+}

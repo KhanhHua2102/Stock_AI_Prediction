@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      # Mount the project directory
+      - ../:/project:rw
+      # Mount data/runtime for shared state
+      - ../data/runtime:/project/data/runtime:rw
+    environment:
+      - PT_PROJECT_DIR=/project
+      - PT_HUB_DATA_DIR=/project/data/runtime
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Nginx reverse proxy (optional - for production with SSL)
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Uncomment for SSL
+      # - ./nginx/ssl:/etc/nginx/ssl:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+    profiles:
+      - production
+
+# For development, run without nginx:
+# docker-compose up backend frontend
+#
+# For production with nginx:
+# docker-compose --profile production up
