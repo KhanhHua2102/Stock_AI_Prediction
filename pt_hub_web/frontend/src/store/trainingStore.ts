@@ -26,7 +26,7 @@ interface TrainingState {
   setTickerTrainingStatus: (ticker: string, status: 'TRAINED' | 'TRAINING' | 'NOT_TRAINED') => void;
   setNeuralSignals: (ticker: string, longSignal: number, shortSignal: number) => void;
   setAllNeuralSignals: (signals: Record<string, NeuralSignal>) => void;
-  addTrainerLog: (message: string) => void;
+  addTrainerLog: (message: string, ticker?: string) => void;
   clearTrainerLogs: () => void;
   setRunningTrainers: (trainers: string[]) => void;
 }
@@ -70,9 +70,9 @@ export const useTrainingStore = create<TrainingState>((set) => ({
       ),
     }),
 
-  addTrainerLog: (message) =>
+  addTrainerLog: (message, ticker?) =>
     set((state) => ({
-      trainerLogs: [...state.trainerLogs, message].slice(-MAX_LOGS),
+      trainerLogs: [...state.trainerLogs, ticker ? `[${ticker}] ${message}` : message].slice(-MAX_LOGS),
     })),
 
   clearTrainerLogs: () => set({ trainerLogs: [] }),

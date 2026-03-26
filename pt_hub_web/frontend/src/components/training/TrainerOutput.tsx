@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useTrainingStore } from '../../store/trainingStore';
 import { useTradeStore } from '../../store/tradeStore';
-import { trainingApi } from '../../services/api';
 import { LogViewer } from '../common/LogViewer';
 
 interface TickerProgress {
@@ -34,89 +33,97 @@ function newTickerProgress(ticker: string): TickerProgress {
   };
 }
 
+function ensureTicker(progress: Map<string, TickerProgress>, ticker: string): TickerProgress {
+  let p = progress.get(ticker);
+  if (!p) {
+    p = newTickerProgress(ticker);
+    progress.set(ticker, p);
+  }
+  return p;
+}
+
 function parseProgress(logs: string[]): Map<string, TickerProgress> {
   const progress = new Map<string, TickerProgress>();
-  let activeTicker: string | null = null;
 
   for (const log of logs) {
-    // Starting training — reset progress for this ticker
-    const startMatch = log.match(/\[TRAINER\] Starting training for (.+)/);
+    // Extract ticker prefix added by store: [GLOB.AX] message content
+    const prefixMatch = log.match(/^\[([^\]]+)\]\s*(.*)/s);
+    const ticker = prefixMatch ? prefixMatch[1] : null;
+    const content = prefixMatch ? prefixMatch[2] : log;
+
+    // [TRAINER] Starting training for X
+    const startMatch = content.match(/\[TRAINER\] Starting training for (.+)/);
     if (startMatch) {
-      const ticker = startMatch[1];
-      progress.set(ticker, newTickerProgress(ticker));
-      activeTicker = ticker;
+      const t = ticker || startMatch[1];
+      const p = ensureTicker(progress, t);
+      p.phase = 'downloading';
+      p.downloadStartTime = Date.now();
       continue;
     }
 
-    // Downloading phase — captures timeframe
-    const dlMatch = log.match(/\[TRAINER\] Downloading (.+) data for (.+)\.\.\./);
+    // [TRAINER] Downloading {timeframe} data for {ticker}...
+    const dlMatch = content.match(/\[TRAINER\] Downloading (.+) data for (.+)\.\.\./);
     if (dlMatch) {
-      const [, timeframe, ticker] = dlMatch;
-      const existing = progress.get(ticker);
-      if (existing) {
-        existing.phase = 'downloading';
-        existing.timeframe = timeframe;
-        existing.downloadStartTime = Date.now();
-        existing.downloadPct = 0;
-        existing.downloadCurrent = 0;
-        existing.downloadTotal = 0;
-      }
-      activeTicker = ticker;
+      const t = ticker || dlMatch[2];
+      const p = ensureTicker(progress, t);
+      p.phase = 'downloading';
+      p.timeframe = dlMatch[1];
+      p.downloadStartTime = Date.now();
+      p.downloadPct = 0;
+      p.downloadCurrent = 0;
+      p.downloadTotal = 0;
       continue;
     }
 
-    // Download progress: [TRAINER] Download progress: 12.50% (12500/100000)
-    const progMatch = log.match(/\[TRAINER\] Download progress: ([\d.]+)% \((\d+)\/(\d+)\)/);
-    if (progMatch) {
-      const p = activeTicker ? progress.get(activeTicker) : null;
-      if (p) {
-        p.downloadPct = parseFloat(progMatch[1]);
-        p.downloadCurrent = parseInt(progMatch[2]);
-        p.downloadTotal = parseInt(progMatch[3]);
-      }
+    // [TRAINER] Download progress: 12.50% (12500/100000)
+    const progMatch = content.match(/\[TRAINER\] Download progress: ([\d.]+)% \((\d+)\/(\d+)\)/);
+    if (progMatch && ticker) {
+      const p = ensureTicker(progress, ticker);
+      p.downloadPct = parseFloat(progMatch[1]);
+      p.downloadCurrent = parseInt(progMatch[2]);
+      p.downloadTotal = parseInt(progMatch[3]);
       continue;
     }
 
-    // Legacy: "gathering history" (before backend update)
-    if (log.includes('gathering history')) {
+    // [TRAINER] No more data available
+    if (content.match(/\[TRAINER\] No more data available/) && ticker) {
+      const p = ensureTicker(progress, ticker);
+      p.downloadPct = 100;
       continue;
     }
 
-    // Total candles (sets the denominator)
-    const totalMatch = log.match(/Total Candles:\s*(\d+)/);
-    if (totalMatch) {
-      const p = activeTicker ? progress.get(activeTicker) : null;
-      if (p) {
-        p.totalCandles = parseInt(totalMatch[1]);
-        p.phase = 'training';
-        p.trainingStartTime = Date.now();
-      }
+    // Total Candles: N
+    const totalMatch = content.match(/Total Candles:\s*(\d+)/);
+    if (totalMatch && ticker) {
+      const p = ensureTicker(progress, ticker);
+      p.totalCandles = parseInt(totalMatch[1]);
+      p.phase = 'training';
+      if (!p.trainingStartTime) p.trainingStartTime = Date.now();
       continue;
     }
 
-    // Current candle (progress tick)
-    const currentMatch = log.match(/current candle:\s*(\d+)/);
-    if (currentMatch) {
-      const p = activeTicker ? progress.get(activeTicker) : null;
-      if (p) {
-        p.currentCandle = parseInt(currentMatch[1]);
-        p.phase = 'training';
-      }
+    // current candle: N
+    const currentMatch = content.match(/current candle:\s*(\d+)/);
+    if (currentMatch && ticker) {
+      const p = ensureTicker(progress, ticker);
+      p.currentCandle = parseInt(currentMatch[1]);
+      p.phase = 'training';
+      if (!p.trainingStartTime) p.trainingStartTime = Date.now();
       continue;
     }
 
-    // Bounce accuracy
-    const accMatch = log.match(/Bounce Accuracy.*?:\s*([\d.]+)/);
-    if (accMatch) {
-      const p = activeTicker ? progress.get(activeTicker) : null;
-      if (p) p.accuracy = parseFloat(accMatch[1]);
+    // Bounce Accuracy
+    const accMatch = content.match(/Bounce Accuracy.*?:\s*([\d.]+)/);
+    if (accMatch && ticker) {
+      const p = ensureTicker(progress, ticker);
+      p.accuracy = parseFloat(accMatch[1]);
       continue;
     }
 
     // Finished processing
-    if (log.includes('finished processing') || log.match(/Processed all|Finished processing all/)) {
-      const p = activeTicker ? progress.get(activeTicker) : null;
-      if (p) p.phase = 'finished';
+    if (content.match(/finished processing|Processed all|Finished processing all/) && ticker) {
+      const p = ensureTicker(progress, ticker);
+      p.phase = 'finished';
       continue;
     }
   }
@@ -127,7 +134,7 @@ function parseProgress(logs: string[]): Map<string, TickerProgress> {
 function formatEta(startTime: number, current: number, total: number): string {
   if (current <= 0 || total <= 0 || startTime <= 0) return '--';
   const elapsed = (Date.now() - startTime) / 1000;
-  if (elapsed < 2) return '--'; // not enough data yet
+  if (elapsed < 2) return '--';
   const rate = current / elapsed;
   const remaining = (total - current) / rate;
   if (remaining < 0) return '--';
@@ -146,7 +153,6 @@ function ProgressBar({ progress }: { progress: TickerProgress }) {
   const isDownloading = phase === 'downloading';
   const isTraining = phase === 'training';
 
-  // Compute percentage
   let pct: number;
   if (phase === 'finished') {
     pct = 100;
@@ -158,7 +164,6 @@ function ProgressBar({ progress }: { progress: TickerProgress }) {
     pct = 0;
   }
 
-  // Phase label
   let phaseLabel: string;
   if (isDownloading) {
     const tf = timeframe || '1hour';
@@ -173,7 +178,6 @@ function ProgressBar({ progress }: { progress: TickerProgress }) {
     phaseLabel = 'Complete';
   }
 
-  // ETA
   let eta = '--';
   if (isDownloading && downloadCurrent > 0 && downloadTotal > 0) {
     eta = formatEta(downloadStartTime, downloadCurrent, downloadTotal);
@@ -222,51 +226,34 @@ function ProgressBar({ progress }: { progress: TickerProgress }) {
 }
 
 export function TrainerOutput() {
-  const { trainerLogs, clearTrainerLogs, addTrainerLog } = useTrainingStore();
+  const { trainerLogs, clearTrainerLogs } = useTrainingStore();
   const { processStatus } = useTradeStore();
-  const pollRef = useRef<number>();
-  const lastCountRef = useRef(0);
   const [showRaw, setShowRaw] = useState(false);
 
-  const runningTicker = Object.entries(processStatus?.trainers ?? {}).find(
-    ([, info]) => info.running
-  )?.[0];
+  const runningCount = useMemo(() => {
+    return Object.values(processStatus?.trainers ?? {}).filter((info) => info.running).length;
+  }, [processStatus]);
 
-  useEffect(() => {
-    if (!runningTicker) {
-      if (pollRef.current) clearInterval(pollRef.current);
-      return;
-    }
-
-    const fetchLogs = async () => {
-      try {
-        const data = await trainingApi.getLogs(runningTicker, 200);
-        if (data.logs.length > lastCountRef.current) {
-          const newLogs = data.logs.slice(lastCountRef.current);
-          newLogs.forEach((log: string) => addTrainerLog(log));
-          lastCountRef.current = data.logs.length;
-        }
-      } catch {
-        // ignore
+  const tickerProgress = useMemo(() => {
+    const progress = parseProgress(trainerLogs);
+    // Ensure all running trainers have a progress entry even if their
+    // initial log was pushed out of the 500-line buffer
+    const trainers = processStatus?.trainers ?? {};
+    for (const [ticker, info] of Object.entries(trainers)) {
+      if (info.running && !progress.has(ticker)) {
+        progress.set(ticker, newTickerProgress(ticker));
       }
-    };
+    }
+    return progress;
+  }, [trainerLogs, processStatus]);
 
-    lastCountRef.current = 0;
-    fetchLogs();
-    pollRef.current = window.setInterval(fetchLogs, 2000);
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [runningTicker, addTrainerLog]);
-
-  const tickerProgress = useMemo(() => parseProgress(trainerLogs), [trainerLogs]);
+  const headerLabel = runningCount > 0 ? ` — ${runningCount} training` : '';
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-2 bg-dark-bg2 border-b border-dark-border">
         <h3 className="text-sm font-semibold text-dark-fg">
-          Trainer Output{runningTicker ? ` — ${runningTicker}` : ''}
+          Trainer Output{headerLabel}
         </h3>
         <div className="flex items-center gap-2">
           <button

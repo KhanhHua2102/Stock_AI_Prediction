@@ -1,10 +1,28 @@
 import type {
+  AnalysisReport,
   Candle,
   ChartOverlays,
   TrainingStatus,
   NeuralSignal,
   ProcessStatus,
+  PortfolioOptimizationResult,
+  RiskReturnResult,
+  RebalanceResult,
+  CorrelationResult,
+  Holding,
   Settings,
+  Portfolio,
+  Transaction,
+  ImportPreviewResult,
+  ImportConfirmResult,
+  PortfolioSummary,
+  ValueHistoryPoint,
+  PerformanceData,
+  DividendDataPoint,
+  SectorAllocation,
+  MonthlyReturn,
+  DrawdownPoint,
+  StockBreakdown,
 } from './types';
 
 const API_BASE = '/api';
@@ -106,6 +124,180 @@ export const settingsApi = {
       method: 'POST',
       body: JSON.stringify({ tickers }),
     }),
+};
+
+// Analysis endpoints
+export const analysisApi = {
+  run: (ticker: string) =>
+    fetchJson<{ status: string; ticker: string }>(`/analysis/run/${ticker}`, { method: 'POST' }),
+
+  getStatus: () =>
+    fetchJson<{ running: boolean; ticker: string | null }>('/analysis/status'),
+
+  getReports: (ticker: string, limit = 20, offset = 0) =>
+    fetchJson<{ reports: AnalysisReport[]; total: number }>(
+      `/analysis/reports/${ticker}?limit=${limit}&offset=${offset}`
+    ),
+
+  getLatest: (ticker: string) =>
+    fetchJson<{ report: AnalysisReport | null }>(`/analysis/reports/${ticker}/latest`),
+
+  getReport: (id: number) =>
+    fetchJson<AnalysisReport>(`/analysis/report/${id}`),
+};
+
+// Portfolio endpoints
+export const portfolioApi = {
+  optimize: (tickers: string[], strategy = 'mean-variance') =>
+    fetchJson<PortfolioOptimizationResult>('/portfolio/optimize', {
+      method: 'POST',
+      body: JSON.stringify({ tickers, strategy }),
+    }),
+
+  riskReturn: (tickers: string[], weights: number[]) =>
+    fetchJson<RiskReturnResult>('/portfolio/risk-return', {
+      method: 'POST',
+      body: JSON.stringify({ tickers, weights }),
+    }),
+
+  rebalance: (
+    holdings: Holding[],
+    targetWeights: { ticker: string; weight: number }[],
+    strategy: 'rebalance' | 'buy-only',
+    additionalCapital = 0,
+  ) =>
+    fetchJson<RebalanceResult>('/portfolio/rebalance', {
+      method: 'POST',
+      body: JSON.stringify({
+        holdings,
+        target_weights: targetWeights,
+        strategy,
+        additional_capital: additionalCapital,
+      }),
+    }),
+
+  correlation: (tickers: string[]) =>
+    fetchJson<CorrelationResult>('/portfolio/correlation', {
+      method: 'POST',
+      body: JSON.stringify({ tickers }),
+    }),
+
+  // Portfolio Management
+  createPortfolio: (name: string, currency = 'AUD', benchmark = '^AXJO') =>
+    fetchJson<{ id: number; name: string }>('/portfolio/portfolios', {
+      method: 'POST',
+      body: JSON.stringify({ name, currency, benchmark }),
+    }),
+
+  listPortfolios: () =>
+    fetchJson<{ portfolios: Portfolio[] }>('/portfolio/portfolios'),
+
+  getPortfolio: (id: number) =>
+    fetchJson<Portfolio>(`/portfolio/portfolios/${id}`),
+
+  updatePortfolio: (id: number, data: { name?: string; currency?: string; benchmark?: string }) =>
+    fetchJson<{ status: string }>(`/portfolio/portfolios/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deletePortfolio: (id: number) =>
+    fetchJson<{ status: string }>(`/portfolio/portfolios/${id}`, { method: 'DELETE' }),
+
+  // Transactions
+  addTransaction: (portfolioId: number, txn: {
+    ticker: string; type: string; date: string; quantity: number; price?: number; fees?: number; notes?: string;
+  }) =>
+    fetchJson<{ id: number }>(`/portfolio/portfolios/${portfolioId}/transactions`, {
+      method: 'POST',
+      body: JSON.stringify(txn),
+    }),
+
+  listTransactions: (portfolioId: number, ticker?: string, limit = 100, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (ticker) params.set('ticker', ticker);
+    return fetchJson<{ transactions: Transaction[]; total: number }>(
+      `/portfolio/portfolios/${portfolioId}/transactions?${params}`
+    );
+  },
+
+  deleteTransaction: (portfolioId: number, txnId: number) =>
+    fetchJson<{ status: string }>(`/portfolio/portfolios/${portfolioId}/transactions/${txnId}`, {
+      method: 'DELETE',
+    }),
+
+  batchDeleteTransactions: (portfolioId: number, ids: number[]) =>
+    fetchJson<{ status: string; count: number }>(
+      `/portfolio/portfolios/${portfolioId}/transactions/batch-delete`,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+    ),
+
+  rebuildSnapshots: (portfolioId: number) =>
+    fetchJson<{ status: string }>(`/portfolio/portfolios/${portfolioId}/rebuild-snapshots`, {
+      method: 'POST',
+    }),
+
+  // Import
+  importPreview: async (portfolioId: number, file: File): Promise<ImportPreviewResult> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${API_BASE}/portfolio/portfolios/${portfolioId}/import/preview`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || 'Import preview failed');
+    }
+    return response.json();
+  },
+
+  importConfirm: (
+    portfolioId: number,
+    fileId: string,
+    mapping: Record<string, string>,
+    currency?: string,
+    options?: { force?: boolean; skip_duplicates?: boolean },
+  ) =>
+    fetchJson<ImportConfirmResult>(
+      `/portfolio/portfolios/${portfolioId}/import/confirm`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          file_id: fileId,
+          mapping,
+          currency: currency || undefined,
+          ...options,
+        }),
+      }
+    ),
+
+  // Dashboard data
+  getHoldings: (portfolioId: number) =>
+    fetchJson<PortfolioSummary>(`/portfolio/portfolios/${portfolioId}/holdings`),
+
+  getValueHistory: (portfolioId: number) =>
+    fetchJson<{ data: ValueHistoryPoint[] }>(`/portfolio/portfolios/${portfolioId}/value-history`),
+
+  getPerformance: (portfolioId: number) =>
+    fetchJson<PerformanceData>(`/portfolio/portfolios/${portfolioId}/performance`),
+
+  getDividends: (portfolioId: number, groupBy: 'month' | 'year' = 'month') =>
+    fetchJson<{ data: DividendDataPoint[]; group_by: string }>(
+      `/portfolio/portfolios/${portfolioId}/dividends?group_by=${groupBy}`
+    ),
+
+  getAllocation: (portfolioId: number) =>
+    fetchJson<{ data: SectorAllocation[] }>(`/portfolio/portfolios/${portfolioId}/allocation`),
+
+  getReturns: (portfolioId: number) =>
+    fetchJson<{ data: MonthlyReturn[] }>(`/portfolio/portfolios/${portfolioId}/returns`),
+
+  getDrawdown: (portfolioId: number) =>
+    fetchJson<{ data: DrawdownPoint[] }>(`/portfolio/portfolios/${portfolioId}/drawdown`),
+
+  getStockBreakdown: (portfolioId: number) =>
+    fetchJson<{ data: StockBreakdown[]; closed: StockBreakdown[] }>(`/portfolio/portfolios/${portfolioId}/stock-breakdown`),
 };
 
 // Health check

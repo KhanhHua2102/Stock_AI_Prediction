@@ -61,6 +61,23 @@ export function TrainingControls() {
   };
 
   const allRunning = tickers.length > 0 && tickers.every((t) => runningTrainers.includes(t));
+  const anyRunning = runningTrainers.length > 0;
+
+  const handleStopAll = async () => {
+    setLoading('stop-all');
+    setError(null);
+    try {
+      for (const ticker of runningTrainers) {
+        const response = await trainingApi.stop(ticker);
+        if (response.process_status) {
+          setProcessStatus(response.process_status);
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to stop training');
+    }
+    setLoading(null);
+  };
 
   const handleTrainAll = async () => {
     setLoading('train-all');
@@ -97,13 +114,24 @@ export function TrainingControls() {
     <div className="p-4">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-dark-fg">Training Controls</h3>
-        <button
-          onClick={handleTrainAll}
-          disabled={loading === 'train-all' || allRunning}
-          className="px-3 py-1 text-xs bg-dark-accent hover:bg-opacity-80 text-dark-bg rounded disabled:opacity-50"
-        >
-          {loading === 'train-all' ? 'Starting...' : 'Train All'}
-        </button>
+        <div className="flex items-center gap-2">
+          {anyRunning && (
+            <button
+              onClick={handleStopAll}
+              disabled={loading === 'stop-all'}
+              className="px-3 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
+            >
+              {loading === 'stop-all' ? 'Stopping...' : 'Stop All'}
+            </button>
+          )}
+          <button
+            onClick={handleTrainAll}
+            disabled={loading === 'train-all' || allRunning}
+            className="px-3 py-1 text-xs bg-dark-accent hover:bg-opacity-80 text-dark-bg rounded disabled:opacity-50"
+          >
+            {loading === 'train-all' ? 'Starting...' : 'Train All'}
+          </button>
+        </div>
       </div>
 
       <div className="space-y-3 mb-4">

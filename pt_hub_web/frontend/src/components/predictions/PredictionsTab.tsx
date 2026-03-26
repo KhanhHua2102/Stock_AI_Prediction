@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useSettingsStore, selectTickers, selectTimeframes } from '../../store/settingsStore';
 import { predictionsApi } from '../../services/api';
+import { DraggableTickerBar } from '../common/DraggableTickerBar';
 
 interface PredictionData {
   signals: Record<string, {
@@ -71,22 +72,7 @@ export function PredictionsTab() {
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Ticker selector */}
-      <div className="flex items-center gap-2 p-3 border-b border-dark-border bg-dark-bg2">
-        {tickers.map((ticker) => (
-          <button
-            key={ticker}
-            onClick={() => setSelectedTicker(ticker)}
-            className={`px-4 py-2 text-sm font-medium rounded transition-colors ${
-              selectedTicker === ticker
-                ? 'bg-dark-accent text-white'
-                : 'bg-dark-panel text-dark-muted hover:text-dark-fg hover:bg-dark-panel2'
-            }`}
-          >
-            {ticker}
-          </button>
-        ))}
-      </div>
+      <DraggableTickerBar selectedTicker={selectedTicker} onSelect={setSelectedTicker} />
 
       {/* Main content */}
       <div className="flex-1 overflow-auto p-4">

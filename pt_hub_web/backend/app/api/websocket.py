@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from app.services.process_manager import process_manager
 from app.services.file_watcher import file_watcher
+from app.services.analysis_engine import analysis_engine
 
 router = APIRouter()
 
@@ -55,7 +56,7 @@ manager = ConnectionManager()
 
 # Background task for periodic status updates
 async def status_broadcast_task():
-    """Periodically broadcast status updates."""
+    """Periodically broadcast status updates (reads from DB, not files)."""
     while True:
         try:
             # Broadcast process status
@@ -95,10 +96,8 @@ def _schedule_broadcast(coro):
     """Schedule a coroutine to run, handling both async and thread contexts."""
     try:
         loop = asyncio.get_running_loop()
-        # We're in an async context, use create_task
         asyncio.create_task(coro)
     except RuntimeError:
-        # We're in a thread, use the saved event loop
         if _event_loop is not None:
             asyncio.run_coroutine_threadsafe(coro, _event_loop)
 
@@ -126,34 +125,26 @@ process_manager.register_log_callback(on_log_message)
 process_manager.register_status_callback(on_status_change)
 
 
-# Register file watcher callbacks
-def on_file_change(event_type: str, file_path: str):
-    """Callback for file changes in hub_data."""
-    if event_type == "trader_status":
-        status = file_watcher.read_trader_status()
-        if status:
-            _schedule_broadcast(manager.broadcast("trader_status", {
-                "type": "trader_status",
-                "data": status
-            }))
-    elif event_type == "trade_history":
-        trades = file_watcher.read_trade_history(1)
-        if trades:
-            _schedule_broadcast(manager.broadcast("trades", {
-                "type": "trade_executed",
-                "data": trades[-1]
-            }))
-    elif event_type == "runner_ready":
-        status = process_manager.get_runner_ready()
-        _schedule_broadcast(manager.broadcast("process_status", {
-            "type": "runner_ready",
-            "data": status
-        }))
+# Register analysis engine callbacks
+def on_analysis_log(message: str, ticker: str | None = None):
+    """Callback for analysis log/streaming messages."""
+    _schedule_broadcast(manager.broadcast("analysis_logs", {
+        "type": "analysis_log",
+        "ticker": ticker,
+        "message": message,
+    }))
 
 
-file_watcher.on_change("trader_status", on_file_change)
-file_watcher.on_change("trade_history", on_file_change)
-file_watcher.on_change("runner_ready", on_file_change)
+def on_analysis_complete(report: dict):
+    """Callback when analysis finishes."""
+    _schedule_broadcast(manager.broadcast("analysis_logs", {
+        "type": "analysis_complete",
+        "data": report,
+    }))
+
+
+analysis_engine.register_log_callback(on_analysis_log)
+analysis_engine.register_complete_callback(on_analysis_complete)
 
 
 @router.websocket("/ws")

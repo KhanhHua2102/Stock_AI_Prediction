@@ -4,14 +4,13 @@ import shutil
 import json
 import subprocess
 import threading
-import queue
 import asyncio
 import psutil
 from pathlib import Path
 from typing import Dict, Optional, Callable, List
 from dataclasses import dataclass, field
 
-from app.config import settings
+from app.config import settings, runtime_db
 
 
 def get_python_executable() -> str:
@@ -36,7 +35,8 @@ def get_python_executable() -> str:
 class ProcessInfo:
     """Information about a running process."""
     process: Optional[subprocess.Popen] = None
-    log_queue: queue.Queue = field(default_factory=queue.Queue)
+    log_list: List[str] = field(default_factory=list)
+    _log_lock: threading.Lock = field(default_factory=threading.Lock)
     reader_thread: Optional[threading.Thread] = None
 
     @property
@@ -46,6 +46,14 @@ class ProcessInfo:
     @property
     def pid(self) -> Optional[int]:
         return self.process.pid if self.process else None
+
+    def append_log(self, line: str):
+        with self._log_lock:
+            self.log_list.append(line)
+
+    def get_logs(self, limit: int) -> List[str]:
+        with self._log_lock:
+            return self.log_list[-limit:]
 
 
 class ProcessManager:
@@ -102,21 +110,17 @@ class ProcessManager:
             if not line:
                 break
             line = line.rstrip("\n\r")
-            proc_info.log_queue.put(line)
+            proc_info.append_log(line)
             self._broadcast_log(source, line, ticker)
 
     def _reset_runner_ready(self):
-        """Reset runner_ready.json before starting neural runner."""
-        ready_path = self.hub_data_dir / "runner_ready.json"
-        try:
-            ready_path.write_text(json.dumps({
-                "ready": False,
-                "stage": "starting",
-                "ready_tickers": [],
-                "total_tickers": len(settings.tickers)
-            }))
-        except Exception:
-            pass
+        """Reset runner_ready state in database."""
+        runtime_db.set_status("runner_ready", {
+            "ready": False,
+            "stage": "starting",
+            "ready_tickers": [],
+            "total_tickers": len(settings.tickers),
+        })
 
     def start_neural(self) -> bool:
         """Start pt_thinker.py (neural runner)."""
@@ -244,18 +248,15 @@ class ProcessManager:
             self.stop_trainer(ticker)
 
     def get_runner_ready(self) -> dict:
-        """Read runner_ready.json to check neural runner status."""
-        ready_path = self.hub_data_dir / "runner_ready.json"
-        try:
-            if ready_path.exists():
-                return json.loads(ready_path.read_text())
-        except Exception:
-            pass
+        """Read runner_ready state from database."""
+        data = runtime_db.get_status("runner_ready")
+        if data:
+            return data
         return {
             "ready": False,
             "stage": "unknown",
             "ready_tickers": [],
-            "total_tickers": 0
+            "total_tickers": 0,
         }
 
     async def wait_for_runner_ready(self, timeout: float = 60.0) -> bool:
@@ -287,27 +288,11 @@ class ProcessManager:
 
     def get_logs(self, source: str, limit: int = 100, ticker: Optional[str] = None) -> List[str]:
         """Get recent logs from a process."""
-        logs = []
         if source == "runner":
-            q = self.neural.log_queue
+            return self.neural.get_logs(limit)
         elif source == "trainer" and ticker and ticker in self.trainers:
-            q = self.trainers[ticker].log_queue
-        else:
-            return logs
-
-        # Drain queue to list
-        temp_logs = []
-        try:
-            while True:
-                temp_logs.append(q.get_nowait())
-        except queue.Empty:
-            pass
-
-        # Put back and return last N
-        for log in temp_logs:
-            q.put(log)
-
-        return temp_logs[-limit:]
+            return self.trainers[ticker].get_logs(limit)
+        return []
 
 
 # Singleton instance

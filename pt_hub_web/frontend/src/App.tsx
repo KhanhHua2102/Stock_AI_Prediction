@@ -1,22 +1,70 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useSettingsStore } from './store/settingsStore';
 import { settingsApi } from './services/api';
-import { TradeTab } from './components/trade/TradeTab';
 import { TrainingTab } from './components/training/TrainingTab';
 import { ChartsTab } from './components/charts/ChartsTab';
 import { PredictionsTab } from './components/predictions/PredictionsTab';
+import { AnalysisTab } from './components/analysis/AnalysisTab';
+import { PortfolioTab } from './components/portfolio/PortfolioTab';
 import { Header } from './components/common/Header';
 import { SettingsModal } from './components/common/SettingsModal';
 
+const TAB_LABELS: Record<string, string> = {
+  training: 'Training',
+  predictions: 'Predictions',
+  charts: 'Charts',
+  analysis: 'Analysis',
+  portfolio: 'Portfolio',
+};
+
+const TAB_COMPONENTS: Record<string, React.FC> = {
+  training: TrainingTab,
+  predictions: PredictionsTab,
+  charts: ChartsTab,
+  analysis: AnalysisTab,
+  portfolio: PortfolioTab,
+};
+
 function App() {
   const { status } = useWebSocket();
-  const { activeTab, setActiveTab, setSettings } = useSettingsStore();
+  const { activeTab, setActiveTab, setSettings, tabOrder, reorderTabs } = useSettingsStore();
   const [showSettings, setShowSettings] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const dragNode = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     settingsApi.get().then(setSettings).catch(console.error);
   }, [setSettings]);
+
+  const handleDragStart = (e: React.DragEvent<HTMLButtonElement>, index: number) => {
+    setDragIndex(index);
+    dragNode.current = e.currentTarget;
+    e.dataTransfer.effectAllowed = 'move';
+    // Make the drag image slightly transparent
+    requestAnimationFrame(() => {
+      if (dragNode.current) dragNode.current.style.opacity = '0.4';
+    });
+  };
+
+  const handleDragEnd = () => {
+    if (dragNode.current) dragNode.current.style.opacity = '1';
+    if (dragIndex !== null && dragOverIndex !== null && dragIndex !== dragOverIndex) {
+      reorderTabs(dragIndex, dragOverIndex);
+    }
+    setDragIndex(null);
+    setDragOverIndex(null);
+    dragNode.current = null;
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLButtonElement>, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverIndex !== index) setDragOverIndex(index);
+  };
+
+  const ActiveComponent = TAB_COMPONENTS[activeTab];
 
   return (
     <div className="flex flex-col h-screen bg-dark-bg">
@@ -24,30 +72,21 @@ function App() {
 
       {/* Tab Navigation */}
       <div className="flex border-b border-dark-border bg-dark-bg2">
-        <TabButton
-          active={activeTab === 'trade'}
-          onClick={() => setActiveTab('trade')}
-        >
-          Runner
-        </TabButton>
-        <TabButton
-          active={activeTab === 'training'}
-          onClick={() => setActiveTab('training')}
-        >
-          Training
-        </TabButton>
-        <TabButton
-          active={activeTab === 'predictions'}
-          onClick={() => setActiveTab('predictions')}
-        >
-          Predictions
-        </TabButton>
-        <TabButton
-          active={activeTab === 'charts'}
-          onClick={() => setActiveTab('charts')}
-        >
-          Charts
-        </TabButton>
+        {tabOrder.map((tabId, index) => (
+          <TabButton
+            key={tabId}
+            active={activeTab === tabId}
+            onClick={() => setActiveTab(tabId)}
+            draggable
+            onDragStart={(e) => handleDragStart(e, index)}
+            onDragEnd={handleDragEnd}
+            onDragOver={(e) => handleDragOver(e, index)}
+            showDropIndicator={dragOverIndex === index && dragIndex !== index}
+            dropSide={dragIndex !== null && dragOverIndex === index ? (dragIndex < index ? 'right' : 'left') : null}
+          >
+            {TAB_LABELS[tabId]}
+          </TabButton>
+        ))}
         <div className="flex-1" />
         <button
           onClick={() => setShowSettings(true)}
@@ -63,10 +102,7 @@ function App() {
 
       {/* Tab Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === 'trade' && <TradeTab />}
-        {activeTab === 'training' && <TrainingTab />}
-        {activeTab === 'predictions' && <PredictionsTab />}
-        {activeTab === 'charts' && <ChartsTab />}
+        {ActiveComponent && <ActiveComponent />}
       </div>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
@@ -78,21 +114,43 @@ function TabButton({
   active,
   onClick,
   children,
+  draggable,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  showDropIndicator,
+  dropSide,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  draggable?: boolean;
+  onDragStart?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  onDragEnd?: () => void;
+  onDragOver?: (e: React.DragEvent<HTMLButtonElement>) => void;
+  showDropIndicator?: boolean;
+  dropSide?: 'left' | 'right' | null;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`px-6 py-3 text-sm font-medium transition-colors ${
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      className={`relative px-6 py-3 text-sm font-medium transition-colors cursor-grab active:cursor-grabbing select-none ${
         active
           ? 'text-dark-accent border-b-2 border-dark-accent bg-dark-panel'
           : 'text-dark-muted hover:text-dark-fg hover:bg-dark-panel'
       }`}
     >
+      {showDropIndicator && dropSide === 'left' && (
+        <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-dark-accent rounded" />
+      )}
       {children}
+      {showDropIndicator && dropSide === 'right' && (
+        <span className="absolute right-0 top-1 bottom-1 w-0.5 bg-dark-accent rounded" />
+      )}
     </button>
   );
 }

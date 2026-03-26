@@ -113,6 +113,12 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TRAINING_DATA_DIR = os.path.join(os.path.dirname(_BASE_DIR), "data", "training")
 os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
 
+# ---- Shared RuntimeDB (SQLite) ----
+sys.path.insert(0, os.path.dirname(_BASE_DIR))
+from pathlib import Path as _Path
+from shared.runtime_db import RuntimeDB
+_runtime_db = RuntimeDB(_Path(os.path.dirname(_BASE_DIR)) / "data" / "runtime.db")
+
 # ---- speed knobs ----
 VERBOSE = False  # set True if you want the old high-volume prints
 
@@ -135,6 +141,10 @@ def _read_text(path):
         return f.read()
 
 
+def _parse_clean(raw: str) -> str:
+    return raw.replace("'", "").replace(",", "").replace('"', "").replace("]", "").replace("[", "")
+
+
 def load_memory(tf_choice):
     """Load memories/weights for a timeframe once and keep them in RAM."""
     if tf_choice in _memory_cache:
@@ -146,102 +156,72 @@ def load_memory(tf_choice):
         "low_weight_list": [],
         "dirty": False,
     }
-    try:
-        data["memory_list"] = (
-            _read_text(f"memories_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split("~")
-        )
-    except:
-        data["memory_list"] = []
-    try:
-        data["weight_list"] = (
-            _read_text(f"memory_weights_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-    except:
-        data["weight_list"] = []
-    try:
-        data["high_weight_list"] = (
-            _read_text(f"memory_weights_high_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-    except:
-        data["high_weight_list"] = []
-    try:
-        data["low_weight_list"] = (
-            _read_text(f"memory_weights_low_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-    except:
-        data["low_weight_list"] = []
+    row = _runtime_db.get_memory(_safe_ticker, tf_choice)
+    if row:
+        try:
+            data["memory_list"] = _parse_clean(row["memories"]).split("~") if row["memories"] else []
+        except:
+            data["memory_list"] = []
+        try:
+            data["weight_list"] = _parse_clean(row["weights"]).split(" ") if row["weights"] else []
+        except:
+            data["weight_list"] = []
+        try:
+            data["high_weight_list"] = _parse_clean(row["weights_high"]).split(" ") if row["weights_high"] else []
+        except:
+            data["high_weight_list"] = []
+        try:
+            data["low_weight_list"] = _parse_clean(row["weights_low"]).split(" ") if row["weights_low"] else []
+        except:
+            data["low_weight_list"] = []
+    else:
+        # Fallback to flat files for backward compatibility (first run after migration)
+        try:
+            data["memory_list"] = _parse_clean(_read_text(f"memories_{tf_choice}.txt")).split("~")
+        except:
+            data["memory_list"] = []
+        try:
+            data["weight_list"] = _parse_clean(_read_text(f"memory_weights_{tf_choice}.txt")).split(" ")
+        except:
+            data["weight_list"] = []
+        try:
+            data["high_weight_list"] = _parse_clean(_read_text(f"memory_weights_high_{tf_choice}.txt")).split(" ")
+        except:
+            data["high_weight_list"] = []
+        try:
+            data["low_weight_list"] = _parse_clean(_read_text(f"memory_weights_low_{tf_choice}.txt")).split(" ")
+        except:
+            data["low_weight_list"] = []
     _memory_cache[tf_choice] = data
     return data
 
 
 def flush_memory(tf_choice, force=False):
-    """Write memories/weights back to disk only when they changed (batch IO)."""
+    """Write memories/weights to SQLite only when they changed (batch IO)."""
     data = _memory_cache.get(tf_choice)
     if not data:
         return
     if (not data.get("dirty")) and (not force):
         return
     try:
-        with open(os.path.join(TRAINING_DATA_DIR, f"memories_{tf_choice}.txt"), "w+", encoding="utf-8") as f:
-            f.write("~".join([x for x in data["memory_list"] if str(x).strip() != ""]))
-    except:
-        pass
-    try:
-        with open(os.path.join(TRAINING_DATA_DIR, f"memory_weights_{tf_choice}.txt"), "w+", encoding="utf-8") as f:
-            f.write(
-                " ".join([str(x) for x in data["weight_list"] if str(x).strip() != ""])
-            )
-    except:
-        pass
-    try:
-        with open(os.path.join(TRAINING_DATA_DIR, f"memory_weights_high_{tf_choice}.txt"), "w+", encoding="utf-8") as f:
-            f.write(
-                " ".join(
-                    [str(x) for x in data["high_weight_list"] if str(x).strip() != ""]
-                )
-            )
-    except:
-        pass
-    try:
-        with open(os.path.join(TRAINING_DATA_DIR, f"memory_weights_low_{tf_choice}.txt"), "w+", encoding="utf-8") as f:
-            f.write(
-                " ".join(
-                    [str(x) for x in data["low_weight_list"] if str(x).strip() != ""]
-                )
-            )
+        memories = "~".join([x for x in data["memory_list"] if str(x).strip() != ""])
+        weights = " ".join([str(x) for x in data["weight_list"] if str(x).strip() != ""])
+        weights_high = " ".join([str(x) for x in data["high_weight_list"] if str(x).strip() != ""])
+        weights_low = " ".join([str(x) for x in data["low_weight_list"] if str(x).strip() != ""])
+        _runtime_db.upsert_memory(_safe_ticker, tf_choice,
+            memories=memories,
+            weights=weights,
+            weights_high=weights_high,
+            weights_low=weights_low,
+        )
     except:
         pass
     data["dirty"] = False
 
 
 def write_threshold_sometimes(tf_choice, perfect_threshold, loop_i, every=200):
-    """Avoid writing neural_perfect_threshold_* every single loop."""
+    """Avoid writing neural_perfect_threshold every single loop."""
     last = _last_threshold_written.get(tf_choice)
-    # write occasionally, or if it changed meaningfully
     if (
         (loop_i % every != 0)
         and (last is not None)
@@ -249,10 +229,7 @@ def write_threshold_sometimes(tf_choice, perfect_threshold, loop_i, every=200):
     ):
         return
     try:
-        with open(
-            os.path.join(TRAINING_DATA_DIR, f"neural_perfect_threshold_{tf_choice}.txt"), "w+", encoding="utf-8"
-        ) as f:
-            f.write(str(perfect_threshold))
+        _runtime_db.upsert_memory(_safe_ticker, tf_choice, perfect_threshold=perfect_threshold)
         _last_threshold_written[tf_choice] = perfect_threshold
     except:
         pass
@@ -308,40 +285,28 @@ tf_choices = ["1day", "1week"]
 tf_minutes = [1440, 10080]
 # --- GUI HUB INPUT (NO PROMPTS) ---
 # Usage: python pt_trainer.py BTC [reprocess_yes|reprocess_no]
-_arg_coin = "BTC"
+_arg_ticker = "BTC"
 
 try:
     if len(sys.argv) > 1 and str(sys.argv[1]).strip():
-        _arg_coin = str(sys.argv[1]).strip().upper()
+        _arg_ticker = str(sys.argv[1]).strip().upper()
 except Exception:
-    _arg_coin = "BTC"
+    _arg_ticker = "BTC"
 
-coin_choice = _arg_coin  # tickers like "^GSPC", "GLOB.AX", "VNINDEX" passed directly
-print(f"[TRAINER] Starting training for {coin_choice}")
+ticker_choice = _arg_ticker  # tickers like "^GSPC", "GLOB.AX", "VNINDEX" passed directly
+print(f"[TRAINER] Starting training for {ticker_choice}")
 
-# Update TRAINING_DATA_DIR to per-coin subdirectory
-_safe_coin = _arg_coin.replace("^", "").replace(".", "_")
-TRAINING_DATA_DIR = os.path.join(TRAINING_DATA_DIR, _safe_coin)
+# Update TRAINING_DATA_DIR to per-ticker subdirectory
+_safe_ticker = _arg_ticker.replace("^", "").replace(".", "_")
+TRAINING_DATA_DIR = os.path.join(TRAINING_DATA_DIR, _safe_ticker)
 os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
 print(f"[TRAINER] Training data dir: {TRAINING_DATA_DIR}")
 
 restart_processing = "yes"
 
-# GUI reads this status file to know if this coin is TRAINING or FINISHED
+# Mark this ticker as TRAINING in the database
 _trainer_started_at = int(time.time())
-try:
-    with open(os.path.join(TRAINING_DATA_DIR, "trainer_status.json"), "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "coin": _arg_coin,
-                "state": "TRAINING",
-                "started_at": _trainer_started_at,
-                "timestamp": _trainer_started_at,
-            },
-            f,
-        )
-except Exception:
-    pass
+_runtime_db.upsert_trainer(_safe_ticker, state="TRAINING", started_at=_trainer_started_at)
 
 
 the_big_index = 0
@@ -467,7 +432,7 @@ while True:
     diff_avg_setting = 0.01
     min_success_rate = 90
     histories = "off"
-    coin_choice_index = 0
+    ticker_choice_index = 0
     list_of_ys_count = 0
     last_difference_between = 0.0
     history_list = []
@@ -478,9 +443,8 @@ while True:
     start_time_yes = start_time
     if "n" in restart_processing.lower():
         try:
-            file = open("trainer_last_start_time.txt", "r")
-            last_start_time = int(file.read())
-            file.close()
+            _row = _runtime_db.get_trainer(_safe_ticker)
+            last_start_time = int(_row["last_start_time"]) if _row and _row.get("last_start_time") else 0
         except:
             last_start_time = 0.0
     else:
@@ -488,20 +452,26 @@ while True:
     end_time = int(start_time - ((1500 * timeframe_minutes) * 60))
     perc_comp = format((len(history_list2) / how_far_to_look_back) * 100, ".2f")
     last_perc_comp = perc_comp + "kjfjakjdakd"
-    print(f"[TRAINER] Downloading {timeframe} data for {coin_choice}...")
+    print(f"[TRAINER] Downloading {timeframe} data for {ticker_choice}...")
+    empty_retries = 0
     while True:
         time.sleep(0.5)
         try:
             history = market.get_kline(
-                coin_choice, timeframe, startAt=end_time, endAt=start_time
+                ticker_choice, timeframe, startAt=end_time, endAt=start_time
             )
         except Exception as e:
             PrintException()
             time.sleep(3.5)
             continue
         if not history:
+            empty_retries += 1
+            if empty_retries >= 3 and len(history_list) > 0:
+                print(f"[TRAINER] No more data available. Downloaded {len(history_list)} candles.")
+                break
             time.sleep(1)
             continue
+        empty_retries = 0
         index = 0
         while True:
             history_list.append(history[index])
@@ -585,7 +555,7 @@ while True:
         price_list.reverse()
         high_price_list.reverse()
         low_price_list.reverse()
-        price = float(market.get_ticker(coin_choice)["price"])
+        price = float(market.get_ticker(ticker_choice)["price"])
     except:
         PrintException()
     history_list = []
@@ -602,7 +572,7 @@ while True:
             matched_patterns_count = 0
             list_of_ys = []
             list_of_ys_count = 0
-            next_coin = "no"
+            next_ticker = "no"
             all_current_patterns = []
             memory_or_history = []
             memory_weights = []
@@ -714,32 +684,14 @@ while True:
             if should_stop_training(loop_i):
                 exited = "yes"
                 print("finished processing")
-                file = open(os.path.join(TRAINING_DATA_DIR, "trainer_last_start_time.txt"), "w+")
-                file.write(str(start_time_yes))
-                file.close()
-
-                # Mark training finished for the GUI
-                try:
-                    _trainer_finished_at = int(time.time())
-                    file = open(os.path.join(TRAINING_DATA_DIR, "trainer_last_training_time.txt"), "w+")
-                    file.write(str(_trainer_finished_at))
-                    file.close()
-                except:
-                    pass
-                try:
-                    with open(os.path.join(TRAINING_DATA_DIR, "trainer_status.json"), "w", encoding="utf-8") as f:
-                        json.dump(
-                            {
-                                "coin": _arg_coin,
-                                "state": "FINISHED",
-                                "started_at": _trainer_started_at,
-                                "finished_at": _trainer_finished_at,
-                                "timestamp": _trainer_finished_at,
-                            },
-                            f,
-                        )
-                except Exception:
-                    pass
+                _trainer_finished_at = int(time.time())
+                _runtime_db.upsert_trainer(_safe_ticker,
+                    state="FINISHED",
+                    started_at=_trainer_started_at,
+                    finished_at=_trainer_finished_at,
+                    last_start_time=start_time_yes,
+                    last_training_time=_trainer_finished_at,
+                )
 
                 # Flush any cached memory/weights before we spin
                 flush_memory(tf_choice, force=True)
@@ -867,37 +819,14 @@ while True:
                         print(
                             "Finished processing all timeframes (number_of_candles has only one entry). Exiting."
                         )
-                        try:
-                            file = open(os.path.join(TRAINING_DATA_DIR, "trainer_last_start_time.txt"), "w+")
-                            file.write(str(start_time_yes))
-                            file.close()
-                        except:
-                            pass
-
-                        # Mark training finished for the GUI
-                        try:
-                            _trainer_finished_at = int(time.time())
-                            file = open(os.path.join(TRAINING_DATA_DIR, "trainer_last_training_time.txt"), "w+")
-                            file.write(str(_trainer_finished_at))
-                            file.close()
-                        except:
-                            pass
-                        try:
-                            with open(
-                                "trainer_status.json", "w", encoding="utf-8"
-                            ) as f:
-                                json.dump(
-                                    {
-                                        "coin": _arg_coin,
-                                        "state": "FINISHED",
-                                        "started_at": _trainer_started_at,
-                                        "finished_at": _trainer_finished_at,
-                                        "timestamp": _trainer_finished_at,
-                                    },
-                                    f,
-                                )
-                        except Exception:
-                            pass
+                        _trainer_finished_at = int(time.time())
+                        _runtime_db.upsert_trainer(_safe_ticker,
+                            state="FINISHED",
+                            started_at=_trainer_started_at,
+                            finished_at=_trainer_finished_at,
+                            last_start_time=start_time_yes,
+                            last_training_time=_trainer_finished_at,
+                        )
 
                         sys.exit(0)
                     else:
@@ -1378,28 +1307,14 @@ while True:
                         number_of_candles_index += 1
                         if number_of_candles_index >= len(number_of_candles):
                             print("Processed all number_of_candles. Exiting.")
-                            # Mark training finished for the GUI
-                            try:
-                                _trainer_finished_at = int(time.time())
-                                file = open(os.path.join(TRAINING_DATA_DIR, "trainer_last_training_time.txt"), "w+")
-                                file.write(str(_trainer_finished_at))
-                                file.close()
-                            except:
-                                pass
-                            try:
-                                with open(os.path.join(TRAINING_DATA_DIR, "trainer_status.json"), "w", encoding="utf-8") as f:
-                                    json.dump(
-                                        {
-                                            "coin": _arg_coin,
-                                            "state": "FINISHED",
-                                            "started_at": _trainer_started_at,
-                                            "finished_at": _trainer_finished_at,
-                                            "timestamp": _trainer_finished_at,
-                                        },
-                                        f,
-                                    )
-                            except Exception:
-                                pass
+                            _trainer_finished_at = int(time.time())
+                            _runtime_db.upsert_trainer(_safe_ticker,
+                                state="FINISHED",
+                                started_at=_trainer_started_at,
+                                finished_at=_trainer_finished_at,
+                                last_start_time=start_time_yes,
+                                last_training_time=_trainer_finished_at,
+                            )
                             sys.exit(0)
                     perfect_yes = "no"
                     if 1 == 1:
@@ -1595,7 +1510,7 @@ while True:
                     prediction_adjuster = 0.0
                     prediction_expander2 = 1.5
                     ended_on = number_of_candles_index
-                    next_coin = "yes"
+                    next_ticker = "yes"
                     profit_hit = "no"
                     long_profit = 0
                     short_profit = 0
@@ -1743,49 +1658,14 @@ while True:
                                                 print(
                                                     "Finished processing all timeframes (number_of_candles has only one entry). Exiting."
                                                 )
-                                                try:
-                                                    file = open(
-                                                        "trainer_last_start_time.txt",
-                                                        "w+",
-                                                    )
-                                                    file.write(str(start_time_yes))
-                                                    file.close()
-                                                except:
-                                                    pass
-
-                                                # Mark training finished for the GUI
-                                                try:
-                                                    _trainer_finished_at = int(
-                                                        time.time()
-                                                    )
-                                                    file = open(
-                                                        "trainer_last_training_time.txt",
-                                                        "w+",
-                                                    )
-                                                    file.write(
-                                                        str(_trainer_finished_at)
-                                                    )
-                                                    file.close()
-                                                except:
-                                                    pass
-                                                try:
-                                                    with open(
-                                                        "trainer_status.json",
-                                                        "w",
-                                                        encoding="utf-8",
-                                                    ) as f:
-                                                        json.dump(
-                                                            {
-                                                                "coin": _arg_coin,
-                                                                "state": "FINISHED",
-                                                                "started_at": _trainer_started_at,
-                                                                "finished_at": _trainer_finished_at,
-                                                                "timestamp": _trainer_finished_at,
-                                                            },
-                                                            f,
-                                                        )
-                                                except Exception:
-                                                    pass
+                                                _trainer_finished_at = int(time.time())
+                                                _runtime_db.upsert_trainer(_safe_ticker,
+                                                    state="FINISHED",
+                                                    started_at=_trainer_started_at,
+                                                    finished_at=_trainer_finished_at,
+                                                    last_start_time=start_time_yes,
+                                                    last_training_time=_trainer_finished_at,
+                                                )
 
                                                 sys.exit(0)
                                             else:
@@ -2156,7 +2036,7 @@ while True:
                                 break
                     else:
                         pass
-                    coin_choice_index += 1
+                    ticker_choice_index += 1
                     history_list = []
                     price_change_list = []
                     current_pattern = []

@@ -5,3 +5,6 @@ node_modules/
 venv/
 *.egg-info/
 /data/
+.env
+.api_key
+/node_modules

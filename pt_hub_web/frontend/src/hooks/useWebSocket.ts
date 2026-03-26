@@ -1,7 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useTradeStore } from '../store/tradeStore';
 import { useTrainingStore } from '../store/trainingStore';
-import type { WSMessage, ProcessStatus, NeuralSignal } from '../services/types';
+import { useAnalysisStore } from '../store/analysisStore';
+import type { WSMessage, ProcessStatus, NeuralSignal, AnalysisReport } from '../services/types';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -20,8 +21,15 @@ export function useWebSocket() {
     addTrainerLog,
   } = useTrainingStore();
 
+  const {
+    addAnalysisLog,
+    setRunning: setAnalysisRunning,
+    setLatestReport,
+  } = useAnalysisStore();
+
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState === WebSocket.OPEN ||
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
@@ -34,7 +42,7 @@ export function useWebSocket() {
       setStatus('connected');
       ws.send(JSON.stringify({
         type: 'subscribe',
-        channels: ['logs', 'process_status', 'neural_signals']
+        channels: ['logs', 'process_status', 'neural_signals', 'analysis_logs']
       }));
     };
 
@@ -49,7 +57,7 @@ export function useWebSocket() {
 
           case 'log':
             if (message.source === 'trainer') {
-              addTrainerLog(message.message || '');
+              addTrainerLog(message.message || '', message.ticker || undefined);
             } else if (message.source === 'runner') {
               addLog('runner', message.message || '');
             }
@@ -61,6 +69,26 @@ export function useWebSocket() {
               setNeuralSignals(ticker, signal.long_signal, signal.short_signal);
             });
             break;
+
+          case 'analysis_log':
+            addAnalysisLog(message.message || '');
+            break;
+
+          case 'analysis_complete': {
+            const report = message.data as AnalysisReport;
+            setAnalysisRunning(false, null);
+            if (report?.ticker) {
+              setLatestReport(report.ticker, report);
+              // Notify portfolio analysis queue if running
+              import('../store/portfolioAnalysisStore').then(({ usePortfolioAnalysisStore }) => {
+                const paState = usePortfolioAnalysisStore.getState();
+                if (paState.isRunning) {
+                  paState.onTickerComplete(report.ticker, report);
+                }
+              });
+            }
+            break;
+          }
 
           case 'runner_ready':
           case 'connected':
@@ -87,7 +115,7 @@ export function useWebSocket() {
     };
 
     wsRef.current = ws;
-  }, [setProcessStatus, addLog, setNeuralSignals, addTrainerLog]);
+  }, [setProcessStatus, addLog, setNeuralSignals, addTrainerLog, addAnalysisLog, setAnalysisRunning, setLatestReport]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {

@@ -5,7 +5,8 @@
     "HCRD.AX",
     "BGBL.AX",
     "A200.AX",
-    "^SPX"
+    "^SPX",
+    "AAPL"
   ],
   "default_timeframe": "1day",
   "timeframes": [

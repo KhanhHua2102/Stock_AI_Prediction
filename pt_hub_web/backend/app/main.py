@@ -9,8 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.services.process_manager import process_manager
-from app.services.file_watcher import file_watcher
-from app.api.routes import trading, training, charts, predictions, settings as settings_routes
+from app.api.routes import trading, training, charts, predictions, settings as settings_routes, analysis, portfolio
 from app.api.websocket import router as ws_router
 
 
@@ -37,7 +36,6 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    file_watcher.start()
     print(f"\n{'='*60}")
     print("Stock AI Prediction — Hub API Started")
     print(f"Host: {settings.api_host}")
@@ -46,7 +44,6 @@ async def lifespan(app: FastAPI):
     print(f"{'='*60}\n")
     yield
     process_manager.stop_all()
-    file_watcher.stop()
 
 
 app = FastAPI(
@@ -95,6 +92,18 @@ app.include_router(
     settings_routes.router,
     prefix="/api/settings",
     tags=["Settings"],
+    dependencies=[Depends(verify_api_key)],
+)
+app.include_router(
+    analysis.router,
+    prefix="/api/analysis",
+    tags=["Analysis"],
+    dependencies=[Depends(verify_api_key)],
+)
+app.include_router(
+    portfolio.router,
+    prefix="/api/portfolio",
+    tags=["Portfolio"],
     dependencies=[Depends(verify_api_key)],
 )
 app.include_router(ws_router)

@@ -17,42 +17,47 @@ import json
 import uuid
 
 # PERFORMANCE FIX (Issues #2, #5): Import performance utilities
-# RACE CONDITION FIX: Import atomic_write for signal files
 try:
     from performance_utils import (
         get_memory_cache, get_http_client,
         TrainingMemoryCache, AsyncHTTPClient,
-        atomic_write
     )
     _PERF_UTILS_AVAILABLE = True
 except ImportError:
     _PERF_UTILS_AVAILABLE = False
     TrainingMemoryCache = None
     AsyncHTTPClient = None
-    # Fallback atomic_write if performance_utils not available
-    def atomic_write(filepath: str, content: str, encoding: str = 'utf-8') -> bool:
-        try:
-            with open(filepath, 'w', encoding=encoding) as f:
-                f.write(content)
-            return True
-        except Exception:
-            return False
 
 # ---- Training data directory ----
 # Use parent directory's data/training folder
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TRAINING_DATA_DIR = os.path.join(os.path.dirname(BASE_DIR), "data", "training")
 
-def training_path(filename: str) -> str:
-    """Return path to file in data/training subdirectory of project root."""
-    os.makedirs(TRAINING_DATA_DIR, exist_ok=True)
-    return os.path.join(TRAINING_DATA_DIR, filename)
+# ---- Shared RuntimeDB (SQLite) ----
+sys.path.insert(0, os.path.dirname(BASE_DIR))
+from pathlib import Path as _Path
+from shared.runtime_db import RuntimeDB
+_runtime_db = RuntimeDB(_Path(os.path.dirname(BASE_DIR)) / "data" / "runtime.db")
+
+def _safe_ticker_name(ticker: str) -> str:
+    """Sanitize ticker for filesystem: ^GSPC -> GSPC, GLOB.AX -> GLOB_AX"""
+    return ticker.upper().replace("^", "").replace(".", "_")
+
+
+def training_path(filename: str, ticker: str = None) -> str:
+    """Return path to file in data/training (or data/training/{TICKER}/) subdirectory."""
+    if ticker:
+        d = os.path.join(TRAINING_DATA_DIR, _safe_ticker_name(ticker))
+    else:
+        d = TRAINING_DATA_DIR
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, filename)
 
 from stock_data_fetcher import market
 
 
 def restart_program():
-    """Restarts the current program (no CLI args; uses hardcoded COIN_SYMBOLS)."""
+    """Restarts the current program (no CLI args; uses hardcoded TICKER_SYMBOLS)."""
     try:
         os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
     except Exception as e:
@@ -82,7 +87,7 @@ minute = 0
 last_minute = 0
 
 # -----------------------------
-# GUI SETTINGS (coins list)
+# GUI SETTINGS (tickers list)
 # -----------------------------
 _GUI_SETTINGS_PATH = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
@@ -90,112 +95,99 @@ _GUI_SETTINGS_PATH = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
 
 _gui_settings_cache = {
     "mtime": None,
-    "coins": ["BTC"],  # fallback defaults
+    "tickers": ["VNINDEX"],  # fallback defaults
 }
 
 
-def _load_gui_coins() -> list:
+def _load_gui_tickers() -> list:
     """
-    Reads gui_settings.json and returns settings["coins"] as an uppercased list.
+    Reads gui_settings.json and returns settings["tickers"] as an uppercased list.
+    Falls back to "coins" key for backwards compatibility.
     Caches by mtime so it is cheap to call frequently.
     """
     try:
         if not os.path.isfile(_GUI_SETTINGS_PATH):
-            return list(_gui_settings_cache["coins"])
+            return list(_gui_settings_cache["tickers"])
 
         mtime = os.path.getmtime(_GUI_SETTINGS_PATH)
         if _gui_settings_cache["mtime"] == mtime:
-            return list(_gui_settings_cache["coins"])
+            return list(_gui_settings_cache["tickers"])
 
         with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
 
-        coins = data.get("coins", None)
-        if not isinstance(coins, list) or not coins:
-            coins = list(_gui_settings_cache["coins"])
+        tickers = data.get("tickers", None) or data.get("coins", None)
+        if not isinstance(tickers, list) or not tickers:
+            tickers = list(_gui_settings_cache["tickers"])
 
-        coins = [str(c).strip().upper() for c in coins if str(c).strip()]
-        if not coins:
-            coins = list(_gui_settings_cache["coins"])
+        tickers = [str(c).strip().upper() for c in tickers if str(c).strip()]
+        if not tickers:
+            tickers = list(_gui_settings_cache["tickers"])
 
         _gui_settings_cache["mtime"] = mtime
-        _gui_settings_cache["coins"] = coins
-        return list(coins)
+        _gui_settings_cache["tickers"] = tickers
+        return list(tickers)
     except Exception:
-        return list(_gui_settings_cache["coins"])
+        return list(_gui_settings_cache["tickers"])
 
 
-def _load_selected_coins() -> list:
+def _load_selected_tickers() -> list:
     """
-    Reads selected_trading_coins.json from hub_data directory.
-    Returns the list of selected coins, or all GUI coins if no selection file exists.
+    Reads selected_trading_tickers.json from hub_data directory.
+    Returns the list of selected tickers, or all GUI tickers if no selection file exists.
     """
     try:
-        selected_coins_path = os.path.join(HUB_DIR, "selected_trading_coins.json")
-        if not os.path.isfile(selected_coins_path):
-            # No selection file means trade all coins
-            return _load_gui_coins()
+        selected_path = os.path.join(HUB_DIR, "selected_trading_coins.json")
+        if not os.path.isfile(selected_path):
+            return _load_gui_tickers()
 
-        with open(selected_coins_path, "r", encoding="utf-8") as f:
+        with open(selected_path, "r", encoding="utf-8") as f:
             data = json.load(f) or {}
 
         selected = data.get("selected_coins", [])
         if not isinstance(selected, list) or not selected:
-            # Invalid or empty selection means trade all coins
-            return _load_gui_coins()
+            return _load_gui_tickers()
 
-        # Normalize and filter to valid coins from GUI settings
-        all_coins = _load_gui_coins()
+        all_tickers = _load_gui_tickers()
         selected = [str(c).strip().upper() for c in selected if str(c).strip()]
-        selected = [c for c in selected if c in all_coins]
+        selected = [c for c in selected if c in all_tickers]
 
         if not selected:
-            # No valid selected coins, fall back to all coins
-            return all_coins
+            return all_tickers
 
         return selected
     except Exception:
-        # Error reading selection, fall back to all coins
-        return _load_gui_coins()
+        return _load_gui_tickers()
 
 
-# Initial coin list (will be kept live via _sync_coins_from_settings())
-COIN_SYMBOLS = _load_gui_coins()
-CURRENT_COINS = list(COIN_SYMBOLS)  # Just use all GUI coins (BTC only now)
+# Initial ticker list (will be kept live via _sync_tickers_from_settings())
+TICKER_SYMBOLS = _load_gui_tickers()
+CURRENT_TICKERS = list(TICKER_SYMBOLS)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
-def coin_folder(sym: str) -> str:
-    # Sanitize ticker for filesystem: ^GSPC -> GSPC, GLOB.AX -> GLOB_AX
-    safe_name = sym.upper().replace("^", "").replace(".", "_")
-    return os.path.join(BASE_DIR, safe_name)
+def ticker_folder(sym: str) -> str:
+    """Working directory for a ticker's relative file I/O."""
+    return os.path.join(BASE_DIR, _safe_ticker_name(sym))
 
 
 # --- training freshness gate (mirrors pt_hub.py) ---
 _TRAINING_STALE_SECONDS = 14 * 24 * 60 * 60  # 14 days
 
 
-def _coin_is_trained(sym: str) -> bool:
+def _ticker_is_trained(sym: str) -> bool:
     """
     Training freshness gate:
 
-    pt_trainer.py writes `trainer_last_training_time.txt` in the coin folder's
-    training_data subdirectory when training starts. If that file is missing OR
-    older than 14 days, we treat the coin as NOT TRAINED.
-
-    This is intentionally the same logic as pt_hub.py so runner behavior matches
-    what the GUI shows.
+    Checks the trainer_status table in SQLite for last_training_time.
+    If missing or older than 14 days, the ticker is NOT TRAINED.
     """
-
     try:
-        folder = coin_folder(sym)
-        stamp_path = os.path.join(folder, TRAINING_DATA_DIR, "trainer_last_training_time.txt")
-        if not os.path.isfile(stamp_path):
+        row = _runtime_db.get_trainer(_safe_ticker_name(sym))
+        if not row or not row.get("last_training_time"):
             return False
-        with open(stamp_path, "r", encoding="utf-8") as f:
-            raw = (f.read() or "").strip()
-        ts = float(raw) if raw else 0.0
+        ts = float(row["last_training_time"])
         if ts <= 0:
             return False
         return (time.time() - ts) <= _TRAINING_STALE_SECONDS
@@ -211,42 +203,30 @@ try:
 except Exception:
     pass
 
-RUNNER_READY_PATH = os.path.join(HUB_DIR, "runner_ready.json")
-
-
-def _atomic_write_json(path: str, data: dict) -> None:
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, path)
-    except Exception:
-        pass
 
 
 def _write_runner_ready(
-    ready: bool, stage: str, ready_coins=None, total_coins: int = 0
+    ready: bool, stage: str, ready_tickers=None, total_tickers: int = 0
 ) -> None:
-    obj = {
+    _runtime_db.set_status("runner_ready", {
         "timestamp": time.time(),
         "ready": bool(ready),
         "stage": stage,
-        "ready_coins": ready_coins or [],
-        "total_coins": int(total_coins or 0),
-    }
-    _atomic_write_json(RUNNER_READY_PATH, obj)
+        "ready_tickers": ready_tickers or [],
+        "total_tickers": int(total_tickers or 0),
+    })
 
 
-# Ensure folders exist for the current configured coins
-for _sym in CURRENT_COINS:
-    os.makedirs(coin_folder(_sym), exist_ok=True)
+# Ensure folders exist for the current configured tickers
+for _sym in CURRENT_TICKERS:
+    os.makedirs(ticker_folder(_sym), exist_ok=True)
 
 
 distance = 0.5
 tf_choices = ["1day", "1week"]
 
 
-def new_coin_state():
+def new_ticker_state():
     return {
         "low_bound_prices": [0.01] * len(tf_choices),
         "high_bound_prices": [99999999999999999] * len(tf_choices),
@@ -271,10 +251,10 @@ def new_coin_state():
 
 states = {}
 
-display_cache = {sym: f"{sym}  (starting.)" for sym in CURRENT_COINS}
+display_cache = {sym: f"{sym}  (starting.)" for sym in CURRENT_TICKERS}
 
-# Track which coins have produced REAL predicted levels (not placeholder 1 / 99999999999999999)
-_ready_coins = set()
+# Track which tickers have produced REAL predicted levels (not placeholder 1 / 99999999999999999)
+_ready_tickers = set()
 
 
 # We consider the runner "READY" only once it is ACTUALLY PRINTING real prediction messages
@@ -293,27 +273,27 @@ def _is_printing_real_predictions(messages) -> bool:
         return False
 
 
-def _sync_coins_from_settings():
+def _sync_tickers_from_settings():
     """
-    Hot-reload coins from GUI settings while runner is running.
+    Hot-reload tickers from GUI settings while runner is running.
 
-    - Adds new coins: creates folder + init_coin() + starts stepping them
-    - Removes coins: stops stepping them (leaves state on disk untouched)
+    - Adds new tickers: creates folder + init_ticker() + starts stepping them
+    - Removes tickers: stops stepping them (leaves state on disk untouched)
     """
-    global CURRENT_COINS
+    global CURRENT_TICKERS
 
-    new_list = _load_gui_coins()
-    if new_list == CURRENT_COINS:
+    new_list = _load_gui_tickers()
+    if new_list == CURRENT_TICKERS:
         return
 
-    old_list = list(CURRENT_COINS)
+    old_list = list(CURRENT_TICKERS)
     added = [c for c in new_list if c not in old_list]
     removed = [c for c in old_list if c not in new_list]
 
-    # Handle removed coins: stop stepping + clear UI cache entries
+    # Handle removed tickers: stop stepping + clear UI cache entries
     for sym in removed:
         try:
-            _ready_coins.discard(sym)
+            _ready_tickers.discard(sym)
         except Exception:
             pass
         try:
@@ -321,10 +301,10 @@ def _sync_coins_from_settings():
         except Exception:
             pass
 
-    # Handle added coins: create folder + init state + show in UI output
+    # Handle added tickers: create folder + init state + show in UI output
     for sym in added:
         try:
-            os.makedirs(coin_folder(sym), exist_ok=True)
+            os.makedirs(ticker_folder(sym), exist_ok=True)
         except Exception:
             pass
         try:
@@ -332,8 +312,8 @@ def _sync_coins_from_settings():
         except Exception:
             pass
         try:
-            # init_coin switches CWD and does network calls, so do it carefully
-            init_coin(sym)
+            # init_ticker switches CWD and does network calls, so do it carefully
+            init_ticker(sym)
             os.chdir(BASE_DIR)
         except Exception:
             try:
@@ -341,38 +321,36 @@ def _sync_coins_from_settings():
             except Exception:
                 pass
 
-    CURRENT_COINS = list(new_list)
+    CURRENT_TICKERS = list(new_list)
 
 
 _write_runner_ready(
-    False, stage="starting", ready_coins=[], total_coins=len(CURRENT_COINS)
+    False, stage="starting", ready_tickers=[], total_tickers=len(CURRENT_TICKERS)
 )
 
 
-def init_coin(sym: str):
-    # switch into the coin's folder so ALL existing relative file I/O stays working
-    os.chdir(coin_folder(sym))
+def init_ticker(sym: str):
+    # switch into the ticker's folder so ALL existing relative file I/O stays working
+    os.chdir(ticker_folder(sym))
 
-    # per-coin "version" + on/off files (no collisions between coins)
-    with open(training_path("alerts_version.txt"), "w+") as f:
-        f.write("5/3/2022/9am")
+    # per-ticker initial signal state
+    safe = _safe_ticker_name(sym)
+    _runtime_db.upsert_signals(safe,
+        alerts_version="5/3/2022/9am",
+        long_onoff="OFF",
+        short_onoff="OFF",
+    )
 
-    with open(training_path("futures_long_onoff.txt"), "w+") as f:
-        f.write("OFF")
+    st = new_ticker_state()
 
-    with open(training_path("futures_short_onoff.txt"), "w+") as f:
-        f.write("OFF")
-
-    st = new_coin_state()
-
-    coin = sym  # ticker passed directly (no suffix)
+    ticker = sym  # ticker passed directly (no suffix)
     ind = 0
     tf_times_local = []
     while True:
         history_list = []
         while True:
             try:
-                history_list = market.get_kline(coin, tf_choices[ind])
+                history_list = market.get_kline(ticker, tf_choices[ind])
                 break
             except Exception as e:
                 time.sleep(3.5)
@@ -396,9 +374,9 @@ def init_coin(sym: str):
     states[sym] = st
 
 
-# init all coins once (from GUI settings)
-for _sym in CURRENT_COINS:
-    init_coin(_sym)
+# init all tickers once (from GUI settings)
+for _sym in CURRENT_TICKERS:
+    init_ticker(_sym)
 
 # restore CWD to base after init
 os.chdir(BASE_DIR)
@@ -416,7 +394,7 @@ prices = []
 starts = []
 long_start_prices = []
 short_start_prices = []
-buy_coins = []
+buy_tickers = []
 cc_update = "yes"
 wr_update = "yes"
 
@@ -459,23 +437,22 @@ def find_purple_area(lines):
     return (None, None)
 
 
-def step_coin(sym: str):
-    # run inside the coin folder so all existing file reads/writes stay relative + isolated
-    os.chdir(coin_folder(sym))
-    coin = sym  # ticker passed directly (no suffix)
+def step_ticker(sym: str):
+    # run inside the ticker folder so all existing file reads/writes stay relative + isolated
+    os.chdir(ticker_folder(sym))
+    ticker = sym  # ticker passed directly (no suffix)
     st = states[sym]
 
     # --- training freshness gate ---
     # If GUI would show NOT TRAINED (missing / stale trainer_last_training_time.txt),
-    # skip this coin so no new trades can start until it is trained again.
-    if not _coin_is_trained(sym):
+    # skip this ticker so no new trades can start until it is trained again.
+    if not _ticker_is_trained(sym):
         try:
-            # Prevent new trades (and DCA) by forcing signals to 0 and keeping PM at baseline.
-            # RACE CONDITION FIX: Use atomic_write to prevent partial reads
-            atomic_write(training_path("futures_long_profit_margin.txt"), "0.25")
-            atomic_write(training_path("futures_short_profit_margin.txt"), "0.25")
-            atomic_write(training_path("long_dca_signal.txt"), "0")
-            atomic_write(training_path("short_dca_signal.txt"), "0")
+            safe = _safe_ticker_name(sym)
+            _runtime_db.upsert_signals(safe,
+                long_profit_margin=0.25, short_profit_margin=0.25,
+                long_dca_signal=0, short_dca_signal=0,
+            )
         except Exception:
             pass
         try:
@@ -483,13 +460,13 @@ def step_coin(sym: str):
         except Exception:
             pass
         try:
-            _ready_coins.discard(sym)
-            all_ready = len(_ready_coins) >= len(CURRENT_COINS)
+            _ready_tickers.discard(sym)
+            all_ready = len(_ready_tickers) >= len(CURRENT_TICKERS)
             _write_runner_ready(
                 all_ready,
                 stage=("real_predictions" if all_ready else "training_required"),
-                ready_coins=sorted(list(_ready_coins)),
-                total_coins=len(CURRENT_COINS),
+                ready_tickers=sorted(list(_ready_tickers)),
+                total_tickers=len(CURRENT_TICKERS),
             )
 
         except Exception:
@@ -533,7 +510,7 @@ def step_coin(sym: str):
         history_list = []
         while True:
             try:
-                history_list = market.get_kline(coin, tf_choices[tf_choice_index])
+                history_list = market.get_kline(ticker, tf_choices[tf_choice_index])
                 break
             except Exception as e:
                 time.sleep(3.5)
@@ -554,80 +531,37 @@ def step_coin(sym: str):
 
     current_candle = 100 * ((closePrice - openPrice) / openPrice)
 
-    # ====== PERFORMANCE FIX (Issue #2): Use cached memory loading ======
-    # Previously: Files read on every iteration causing memory growth
-    # Now: Files cached with mtime-based invalidation
+    # ====== Load neural training data from SQLite ======
     timeframe = tf_choices[tf_choice_index]
+    _safe = _safe_ticker_name(sym)
 
-    if _PERF_UTILS_AVAILABLE:
-        # Use performance-optimized cache
-        memory_cache = get_memory_cache(TRAINING_DATA_DIR)
-        perfect_threshold = memory_cache.get_threshold(timeframe)
+    _mem_row = _runtime_db.get_memory(_safe, timeframe)
+    if _mem_row:
+        perfect_threshold = _mem_row.get("perfect_threshold", 0.0)
     else:
-        # Fallback to original file reading
-        file = open(training_path("neural_perfect_threshold_" + timeframe + ".txt"), "r")
-        perfect_threshold = float(file.read())
-        file.close()
+        perfect_threshold = 0.0
+
+    def _parse_clean(raw: str) -> list:
+        return raw.replace("'", "").replace(",", "").replace('"', "").replace("]", "").replace("[", "")
 
     try:
-        # If we can read/parse training files, this timeframe is NOT a training-file issue.
         training_issues[tf_choice_index] = 0
 
-        if _PERF_UTILS_AVAILABLE:
-            # PERFORMANCE FIX: Use cached memory loading
+        if _mem_row and _mem_row.get("memories"):
+            memory_list = _parse_clean(_mem_row["memories"]).split("~")
+            weight_list = _parse_clean(_mem_row["weights"]).split(" ")
+            high_weight_list = _parse_clean(_mem_row["weights_high"]).split(" ")
+            low_weight_list = _parse_clean(_mem_row["weights_low"]).split(" ")
+        elif _PERF_UTILS_AVAILABLE:
+            # Fallback to file-based cache if DB has no data yet
+            memory_cache = get_memory_cache(os.path.join(TRAINING_DATA_DIR, _safe))
+            perfect_threshold = memory_cache.get_threshold(timeframe)
             memory_list = memory_cache.get_memories(timeframe)
             weight_list = memory_cache.get_weights(timeframe)
             high_weight_list = memory_cache.get_high_weights(timeframe)
             low_weight_list = memory_cache.get_low_weights(timeframe)
         else:
-            # Fallback: Original file reading (for backward compatibility)
-            file = open(training_path("memories_" + timeframe + ".txt"), "r")
-            memory_list = (
-                file.read()
-                .replace("'", "")
-                .replace(",", "")
-                .replace('"', "")
-                .replace("]", "")
-                .replace("[", "")
-                .split("~")
-            )
-            file.close()
-
-            file = open(training_path("memory_weights_" + timeframe + ".txt"), "r")
-            weight_list = (
-                file.read()
-                .replace("'", "")
-                .replace(",", "")
-                .replace('"', "")
-                .replace("]", "")
-                .replace("[", "")
-                .split(" ")
-            )
-            file.close()
-
-            file = open(training_path("memory_weights_high_" + timeframe + ".txt"), "r")
-            high_weight_list = (
-                file.read()
-                .replace("'", "")
-                .replace(",", "")
-                .replace('"', "")
-                .replace("]", "")
-                .replace("[", "")
-                .split(" ")
-            )
-            file.close()
-
-            file = open(training_path("memory_weights_low_" + timeframe + ".txt"), "r")
-            low_weight_list = (
-                file.read()
-                .replace("'", "")
-                .replace(",", "")
-                .replace('"', "")
-                .replace("]", "")
-                .replace("[", "")
-                .split(" ")
-            )
-            file.close()
+            raise FileNotFoundError("No training data in DB or on disk")
 
         mem_ind = 0
         diffs_list = []
@@ -755,12 +689,8 @@ def step_coin(sym: str):
         del perfects[tf_choice_index]
         perfects.insert(tf_choice_index, "inactive")
 
-    # keep threshold persisted (original behavior)
-    file = open(
-        training_path("neural_perfect_threshold_" + tf_choices[tf_choice_index] + ".txt"), "w+"
-    )
-    file.write(str(perfect_threshold))
-    file.close()
+    # keep threshold persisted in DB
+    _runtime_db.upsert_memory(_safe, timeframe, perfect_threshold=perfect_threshold)
 
     # ====== ORIGINAL: compute new high/low predictions ======
     price_list2 = [openPrice, closePrice]
@@ -796,10 +726,10 @@ def step_coin(sym: str):
     if tf_choice_index >= len(tf_choices):
         tf_choice_index = 0
 
-        # reset tf_update for this coin (but DO NOT block-wait; just detect updates and return)
+        # reset tf_update for this ticker (but DO NOT block-wait; just detect updates and return)
         tf_update = ["no"] * len(tf_choices)
 
-        # get current price ONCE per coin
+        # get current price ONCE per ticker
         while True:
             try:
                 current = market.get_current_price(sym)
@@ -849,7 +779,7 @@ def step_coin(sym: str):
             while True:
 
                 try:
-                    history_list = market.get_kline(coin, tf_choices[inder])
+                    history_list = market.get_kline(ticker, tf_choices[inder])
                     break
                 except Exception as e:
                     time.sleep(3.5)
@@ -1131,24 +1061,12 @@ def step_coin(sym: str):
         # bump bounds_version now that we've computed a new set of prediction bounds
         st["bounds_version"] = bounds_version_used_for_messages + 1
 
-        with open(training_path("low_bound_prices.html"), "w+") as file:
-            file.write(
-                str(new_low_bound_prices)
-                .replace("', '", " ")
-                .replace("[", "")
-                .replace("]", "")
-                .replace("'", "")
-            )
-        with open(training_path("high_bound_prices.html"), "w+") as file:
-            file.write(
-                str(new_high_bound_prices)
-                .replace("', '", " ")
-                .replace("[", "")
-                .replace("]", "")
-                .replace("'", "")
-            )
+        _runtime_db.upsert_signals(_safe,
+            low_bound_prices=new_low_bound_prices,
+            high_bound_prices=new_high_bound_prices,
+        )
 
-        # cache display text for this coin (main loop prints everything on one screen)
+        # cache display text for this ticker (main loop prints everything on one screen)
         try:
             display_cache[sym] = (
                 sym + "  " + str(current) + "\n\n" + str(messages).replace("', '", "\n")
@@ -1158,21 +1076,21 @@ def step_coin(sym: str):
             # start of this full-sweep (before we rebuilt bounds above).
             st["last_display_bounds_version"] = bounds_version_used_for_messages
 
-            # Only consider this coin "ready" once we've already rebuilt bounds at least once
+            # Only consider this ticker "ready" once we've already rebuilt bounds at least once
             # AND we're now printing messages generated from those rebuilt bounds.
             if (
                 st["last_display_bounds_version"] >= 1
             ) and _is_printing_real_predictions(messages):
-                _ready_coins.add(sym)
+                _ready_tickers.add(sym)
             else:
-                _ready_coins.discard(sym)
+                _ready_tickers.discard(sym)
 
-            all_ready = len(_ready_coins) >= len(CURRENT_COINS)
+            all_ready = len(_ready_tickers) >= len(CURRENT_TICKERS)
             _write_runner_ready(
                 all_ready,
                 stage=("real_predictions" if all_ready else "warming_up"),
-                ready_coins=sorted(list(_ready_coins)),
-                total_coins=len(CURRENT_COINS),
+                ready_tickers=sorted(list(_ready_tickers)),
+                total_tickers=len(CURRENT_TICKERS),
             )
 
         except:
@@ -1192,9 +1110,10 @@ def step_coin(sym: str):
             except:
                 pm = 0.25
 
-            # RACE CONDITION FIX: Use atomic_write to prevent partial reads by pt_trader
-            atomic_write(training_path("futures_long_profit_margin.txt"), str(pm))
-            atomic_write(training_path("long_dca_signal.txt"), str(longs))
+            _runtime_db.upsert_signals(_safe,
+                long_profit_margin=pm,
+                long_dca_signal=longs,
+            )
 
             # short pm
             current_pms = [m for m in margins if m != 0]
@@ -1205,9 +1124,10 @@ def step_coin(sym: str):
             except:
                 pm = 0.25
 
-            # RACE CONDITION FIX: Use atomic_write to prevent partial reads by pt_trader
-            atomic_write(training_path("futures_short_profit_margin.txt"), str(abs(pm)))
-            atomic_write(training_path("short_dca_signal.txt"), str(shorts))
+            _runtime_db.upsert_signals(_safe,
+                short_profit_margin=abs(pm),
+                short_dca_signal=shorts,
+            )
 
         except:
             PrintException()
@@ -1217,7 +1137,7 @@ def step_coin(sym: str):
         while this_index_now < len(tf_update):
             while True:
                 try:
-                    history_list = market.get_kline(coin, tf_choices[this_index_now])
+                    history_list = market.get_kline(ticker, tf_choices[this_index_now])
                     break
                 except Exception as e:
                     time.sleep(3.5)
@@ -1268,20 +1188,20 @@ def step_coin(sym: str):
 
 try:
     while True:
-        # Hot-reload coins from GUI settings while running
-        _sync_coins_from_settings()
+        # Hot-reload tickers from GUI settings while running
+        _sync_tickers_from_settings()
 
-        for _sym in CURRENT_COINS:
-            step_coin(_sym)
+        for _sym in CURRENT_TICKERS:
+            step_ticker(_sym)
 
         # clear + re-print one combined screen (so you don't see old output above new)
         os.system("cls" if os.name == "nt" else "clear")
 
-        for _sym in CURRENT_COINS:
+        for _sym in CURRENT_TICKERS:
             print(display_cache.get(_sym, _sym + "  (no data yet)"))
             print("\n" + ("-" * 60) + "\n")
 
-        # small sleep so you don't peg CPU when running many coins
+        # small sleep so you don't peg CPU when running many tickers
         time.sleep(0.15)
 
 except Exception:

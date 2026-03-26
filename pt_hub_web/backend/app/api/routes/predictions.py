@@ -1,82 +1,48 @@
 from fastapi import APIRouter, HTTPException
-from pathlib import Path
 
-from app.config import settings
+from app.config import settings, runtime_db
 
 router = APIRouter()
 
 
 def _safe_name(ticker: str) -> str:
-    """Sanitize ticker for filesystem: ^GSPC -> GSPC, GLOB.AX -> GLOB_AX"""
+    """Sanitize ticker for DB key: ^GSPC -> GSPC, GLOB.AX -> GLOB_AX"""
     return ticker.upper().replace("^", "").replace(".", "_")
-
-
-def _read_signal(path: Path) -> int:
-    """Read a signal file (long_dca_signal.txt or short_dca_signal.txt) and return int value."""
-    try:
-        if path.exists():
-            val = path.read_text().strip()
-            if val:
-                return int(float(val))
-    except Exception:
-        pass
-    return 0
-
-
-def _read_float(path: Path) -> float:
-    """Read a file containing a single float value."""
-    try:
-        if path.exists():
-            val = path.read_text().strip()
-            if val:
-                return float(val)
-    except Exception:
-        pass
-    return 0.0
-
-
-def _read_bound_prices(path: Path) -> float:
-    """Read bound prices HTML file, return the last valid price."""
-    try:
-        if path.exists():
-            lines = path.read_text().strip().split("\n")
-            for line in reversed(lines):
-                line = line.strip()
-                if line and line.replace(".", "").replace("-", "").isdigit():
-                    return float(line)
-    except Exception:
-        pass
-    return 0.0
 
 
 @router.get("/{ticker}")
 async def get_predictions(ticker: str):
     """Get prediction signals for a ticker across all timeframes."""
-    if ticker not in settings.coins:
+    if ticker not in settings.tickers:
         raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
 
     safe = _safe_name(ticker)
-    training_dir = settings.project_dir / "data" / "training" / safe
+    signals_row = runtime_db.get_signals(safe)
 
     signals = {}
     for tf in settings.timeframes:
-        tf_dir = training_dir  # signal files are in the ticker's training dir
-
-        signals[tf] = {
-            "long": _read_signal(tf_dir / "long_dca_signal.txt"),
-            "short": _read_signal(tf_dir / "short_dca_signal.txt"),
-            "high_bound": _read_bound_prices(tf_dir / "high_bound_prices.html"),
-            "low_bound": _read_bound_prices(tf_dir / "low_bound_prices.html"),
-        }
+        if signals_row:
+            high_bounds = signals_row.get("high_bound_prices", [])
+            low_bounds = signals_row.get("low_bound_prices", [])
+            signals[tf] = {
+                "long": signals_row.get("long_dca_signal", 0),
+                "short": signals_row.get("short_dca_signal", 0),
+                "high_bound": high_bounds[-1] if high_bounds else 0.0,
+                "low_bound": low_bounds[-1] if low_bounds else 0.0,
+            }
+        else:
+            signals[tf] = {
+                "long": 0,
+                "short": 0,
+                "high_bound": 0.0,
+                "low_bound": 0.0,
+            }
 
     # Get current price from the latest signal data or bound prices
     current_price = 0.0
     try:
-        # Try reading from the ticker data using yfinance
-        import yfinance as yf
-        t = yf.Ticker(ticker)
-        info = t.fast_info
-        current_price = float(info.get("lastPrice", 0) or info.get("regularMarketPrice", 0) or 0)
+        from legacy.stock_data_fetcher import market
+        current_price = market.get_current_price(ticker)
     except Exception:
         pass
 
