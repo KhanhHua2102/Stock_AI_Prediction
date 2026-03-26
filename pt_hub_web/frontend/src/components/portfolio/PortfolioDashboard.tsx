@@ -211,6 +211,24 @@ export function PortfolioDashboard() {
     }
   };
 
+  const todayGain = useMemo(() => {
+    if (valueHistory.length < 1 || stockBreakdown.length === 0) return null;
+    const currentValue = stockBreakdown.reduce((s, h) => s + h.market_value, 0);
+    const lastSnapshot = valueHistory[valueHistory.length - 1];
+    const prevValue = lastSnapshot.value;
+    if (prevValue <= 0) return null;
+    const dollar = currentValue - prevValue;
+    const pct = (dollar / prevValue) * 100;
+    // Check if last snapshot is from yesterday (or last trading day on Mon)
+    const lastDate = new Date(lastSnapshot.date + 'T00:00:00');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((today.getTime() - lastDate.getTime()) / 86400000);
+    // 1 = yesterday, 2-3 = weekend gap (Sat snapshot on Mon)
+    const label = diffDays <= 1 ? 'Today' : diffDays <= 3 ? 'Since last close' : `Since ${lastSnapshot.date}`;
+    return { dollar, pct, label };
+  }, [valueHistory, stockBreakdown]);
+
   const currentStats = useMemo(() => {
     const totalValue = stockBreakdown.reduce((s, h) => s + h.market_value, 0);
     const invested = stockBreakdown.reduce((s, h) => s + h.cost_basis, 0);
@@ -301,6 +319,17 @@ export function PortfolioDashboard() {
           {heroView === 'current' ? (
             <>
               <p className="text-3xl font-bold font-mono" style={{ color: '#ECEDEE' }}>${formatCurrency(currentStats.totalValue)}</p>
+              {todayGain && (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs font-semibold uppercase" style={{ color: '#a1a1aa' }}>{todayGain.label}</span>
+                  <span className="text-sm font-mono font-bold" style={PNL_COLORS(todayGain.dollar)}>
+                    {todayGain.dollar >= 0 ? '+' : ''}${formatCurrency(todayGain.dollar)}
+                  </span>
+                  <span className="text-xs font-mono font-bold" style={PNL_COLORS(todayGain.pct)}>
+                    ({todayGain.pct >= 0 ? '+' : ''}{todayGain.pct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-3 mt-1.5">
                 <span className="text-sm font-mono font-bold" style={PNL_COLORS(currentStats.totalGainPct)}>
                   {currentStats.totalGainPct >= 0 ? '+' : ''}{currentStats.totalGainPct.toFixed(2)}%
@@ -333,6 +362,17 @@ export function PortfolioDashboard() {
           ) : (
             <>
               <p className="text-3xl font-bold font-mono" style={{ color: '#ECEDEE' }}>${formatCurrency(historicalStats.totalValue)}</p>
+              {todayGain && (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-xs font-semibold uppercase" style={{ color: '#a1a1aa' }}>{todayGain.label}</span>
+                  <span className="text-sm font-mono font-bold" style={PNL_COLORS(todayGain.dollar)}>
+                    {todayGain.dollar >= 0 ? '+' : ''}${formatCurrency(todayGain.dollar)}
+                  </span>
+                  <span className="text-xs font-mono font-bold" style={PNL_COLORS(todayGain.pct)}>
+                    ({todayGain.pct >= 0 ? '+' : ''}{todayGain.pct.toFixed(2)}%)
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-3 mt-1.5">
                 <span className="text-sm font-mono font-bold" style={PNL_COLORS(historicalStats.totalGainPct)}>
                   {historicalStats.totalGainPct >= 0 ? '+' : ''}{historicalStats.totalGainPct.toFixed(2)}%
