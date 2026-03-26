@@ -335,7 +335,7 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
             Recent News
           </h3>
           <div className="space-y-3">
-            {report.news.map((item, i) => {
+            {[...report.news].sort((a, b) => (b.datetime ?? 0) - (a.datetime ?? 0)).map((item, i) => {
               const date = item.datetime
                 ? new Date(item.datetime * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
                 : '';

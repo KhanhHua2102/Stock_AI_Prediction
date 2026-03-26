@@ -248,6 +248,7 @@ export interface SectorAllocation {
   sector: string;
   value: number;
   weight_pct: number;
+  tickers?: { ticker: string; value: number; weight_pct: number }[];
 }
 
 export interface MonthlyReturn {
@@ -272,6 +273,17 @@ export interface StockBreakdown {
   dividends: number;
   total_return: number;
   total_return_pct: number;
+  closed_date?: string;
+}
+
+export interface UpcomingEvent {
+  ticker: string;
+  type: 'earnings' | 'ex-dividend' | 'dividend' | 'distribution';
+  date: string;
+  detail: string | null;
+  ex_date?: string;
+  record_date?: string;
+  payment_date?: string;
 }
 
 // WebSocket event types

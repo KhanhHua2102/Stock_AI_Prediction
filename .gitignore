@@ -8,3 +8,9 @@ venv/
 .env
 .api_key
 /node_modules
+.gitnexus
+/.claude
+.mcp.json
+AGENTS.md
+CLAUDE.md
+*.txt

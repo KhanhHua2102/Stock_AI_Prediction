@@ -55,6 +55,184 @@ def normalize_ticker(ticker: str) -> str:
     return ticker
 
 
+_events_cache: dict[str, tuple[float, list[dict]]] = {}
+_EVENTS_TTL = 3600  # cache for 1 hour
+
+_betashares_cache: tuple[float, dict[str, list[dict]]] | None = None
+_BETASHARES_TTL = 86400  # cache for 24 hours
+
+
+def _fetch_betashares_calendar() -> dict[str, list[dict]]:
+    """Scrape BetaShares distribution calendar. Returns {ticker: [events]}."""
+    global _betashares_cache
+    if _betashares_cache and (time.time() - _betashares_cache[0]) < _BETASHARES_TTL:
+        return _betashares_cache[1]
+
+    import re
+    import urllib.request
+    from datetime import date
+
+    url = "https://www.betashares.com.au/distributions-drp/"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        html = urllib.request.urlopen(req, timeout=15).read().decode()
+    except Exception as e:
+        logger.warning("Failed to fetch BetaShares calendar: %s", e)
+        return {}
+
+    tables = re.findall(r"<table>(.*?)</table>", html, re.DOTALL)
+    today = date.today()
+    result: dict[str, list[dict]] = {}
+
+    # Tables come in pairs: ticker-list table, then distribution-calendar table
+    i = 0
+    while i < len(tables) - 1:
+        table = tables[i]
+        headers = re.findall(r"<th>(.*?)</th>", table)
+        if "ASX Code" in headers:
+            # Parse ticker list (strip asterisks)
+            raw_tickers = re.findall(r"<tr>\s*<td>(.*?)</td>", table, re.DOTALL)
+            group_tickers = [t.strip().rstrip("*") for t in raw_tickers]
+
+            # Next table should be the calendar
+            cal_table = tables[i + 1]
+            cal_headers = re.findall(r"<th>(.*?)</th>", cal_table)
+            if "Ex-Date" in cal_headers:
+                rows = re.findall(r"<tr>\s*((?:<td>.*?</td>\s*)+)</tr>", cal_table, re.DOTALL)
+                for row in rows:
+                    cells = re.findall(r"<td>(.*?)</td>", row)
+                    if len(cells) >= 7:
+                        try:
+                            ex_date = datetime.strptime(cells[2], "%d-%b-%y").date()
+                            record_date = datetime.strptime(cells[4], "%d-%b-%y").date()
+                            payment_date = datetime.strptime(cells[6], "%d-%b-%y").date()
+                            if ex_date >= today:
+                                event = {
+                                    "type": "distribution",
+                                    "date": ex_date.isoformat(),
+                                    "ex_date": ex_date.isoformat(),
+                                    "record_date": record_date.isoformat(),
+                                    "payment_date": payment_date.isoformat(),
+                                    "detail": None,
+                                }
+                                for ticker in group_tickers:
+                                    result.setdefault(ticker, []).append(event)
+                        except (ValueError, IndexError):
+                            continue
+                i += 2
+                continue
+        i += 1
+
+    _betashares_cache = (time.time(), result)
+    return result
+
+
+def fetch_upcoming_events(tickers: list[str]) -> list[dict]:
+    """Fetch upcoming earnings, dividends, splits for tickers via yfinance.
+    Returns a flat list of events sorted by date (nearest first)."""
+    import yfinance as yf
+    from datetime import date
+
+    cache_key = ",".join(sorted(tickers))
+    if cache_key in _events_cache:
+        ts, cached = _events_cache[cache_key]
+        if time.time() - ts < _EVENTS_TTL:
+            return cached
+
+    today = date.today()
+    events: list[dict] = []
+
+    # Fetch BetaShares calendar for ASX tickers
+    betashares_data = _fetch_betashares_calendar()
+    betashares_found: set[str] = set()
+    for ticker in tickers:
+        # Strip :AU suffix for BetaShares lookup
+        bs_key = ticker.replace(":AU", "")
+        if bs_key in betashares_data:
+            betashares_found.add(ticker)
+            for ev in betashares_data[bs_key]:
+                events.append({**ev, "ticker": ticker})
+
+    for ticker in tickers:
+        yf_ticker = normalize_ticker(ticker)
+        try:
+            t = yf.Ticker(yf_ticker)
+            cal = t.calendar if hasattr(t, "calendar") else {}
+            if not isinstance(cal, dict):
+                cal = {}
+            info = t.info or {}
+
+            # Earnings date
+            earnings_dates = cal.get("Earnings Date")
+            if earnings_dates:
+                for ed in (earnings_dates if isinstance(earnings_dates, list) else [earnings_dates]):
+                    d = ed if isinstance(ed, date) else None
+                    if d and d >= today:
+                        events.append({
+                            "ticker": ticker,
+                            "type": "earnings",
+                            "date": d.isoformat(),
+                            "detail": f"EPS est. {cal.get('Earnings Average', 'N/A')}",
+                        })
+
+            # Skip yfinance dividend lookup if BetaShares already provided data
+            if ticker in betashares_found:
+                pass
+            else:
+                # Ex-dividend date from yfinance
+                ex_div = cal.get("Ex-Dividend Date")
+                if isinstance(ex_div, date) and ex_div >= today:
+                    rate = info.get("dividendRate")
+                    events.append({
+                        "ticker": ticker,
+                        "type": "ex-dividend",
+                        "date": ex_div.isoformat(),
+                        "detail": f"${rate:.2f}/share" if rate else None,
+                    })
+                elif isinstance(ex_div, str):
+                    try:
+                        d = date.fromisoformat(ex_div)
+                        if d >= today:
+                            rate = info.get("dividendRate")
+                            events.append({
+                                "ticker": ticker,
+                                "type": "ex-dividend",
+                                "date": d.isoformat(),
+                                "detail": f"${rate:.2f}/share" if rate else None,
+                            })
+                    except ValueError:
+                        pass
+
+                # Dividend payment date
+                div_date = cal.get("Dividend Date")
+                if isinstance(div_date, date) and div_date >= today:
+                    events.append({
+                        "ticker": ticker,
+                        "type": "dividend",
+                        "date": div_date.isoformat(),
+                        "detail": None,
+                    })
+                elif isinstance(div_date, str):
+                    try:
+                        d = date.fromisoformat(div_date)
+                        if d >= today:
+                            events.append({
+                                "ticker": ticker,
+                                "type": "dividend",
+                                "date": d.isoformat(),
+                                "detail": None,
+                            })
+                    except ValueError:
+                        pass
+
+        except Exception as e:
+            logger.warning("Failed to fetch events for %s: %s", ticker, e)
+
+    events.sort(key=lambda e: e["date"])
+    _events_cache[cache_key] = (time.time(), events)
+    return events
+
+
 def compute_portfolio_summary(holdings: list[dict], live_prices: dict[str, float], display_currency: str = "AUD") -> dict:
     """Compute full portfolio summary with live prices, converting foreign currencies."""
     # Determine which FX rates we need
@@ -89,13 +267,14 @@ def compute_portfolio_summary(holdings: list[dict], live_prices: dict[str, float
         unrealised = market_value - cost_basis_display if qty > 0 else 0
         unrealised_pct = (unrealised / cost_basis_display * 100) if cost_basis_display > 0 else 0
 
-        total_value += market_value
-        total_cost += cost_basis_display
         total_realised += realised_display
         total_dividends += dividends_display
 
-        # Skip zero-quantity holdings from the breakdown (realised P&L still counted in totals)
-        if qty < 0.0001:
+        # Only include active positions in total_value / total_cost (closed have market_value=0)
+        if qty > 0.0001:
+            total_value += market_value
+            total_cost += cost_basis_display
+        else:
             continue
 
         enriched.append({
@@ -204,25 +383,6 @@ def compute_benchmark_returns(benchmark_ticker: str, start_date: str, end_date: 
     return []
 
 
-def compute_drawdown(value_series: list[dict]) -> list[dict]:
-    """Compute drawdown series from daily values."""
-    if not value_series:
-        return []
-
-    result = []
-    running_max = 0.0
-
-    for point in value_series:
-        val = point.get("total_value", point.get("value", 0))
-        running_max = max(running_max, val)
-        dd = ((val - running_max) / running_max * 100) if running_max > 0 else 0
-        result.append({
-            "date": point["date"],
-            "drawdown": round(dd, 4),
-        })
-
-    return result
-
 
 def compute_annualised_return(start_value: float, end_value: float, days: int) -> float:
     """Compute annualised return from start/end values and number of days."""
@@ -277,22 +437,62 @@ def compute_max_drawdown(values: list[float]) -> float:
 
 
 def compute_monthly_returns(snapshots: list[dict]) -> list[dict]:
-    """Compute monthly returns from daily snapshots."""
+    """Compute monthly returns from daily snapshots using TWR.
+
+    Uses cash_flow (cumulative deposits) to adjust for deposits/withdrawals
+    so each month reflects actual investment performance, not cash movement.
+    """
     if len(snapshots) < 2:
         return []
 
-    monthly: dict[str, dict] = {}
+    # Group snapshots by month
+    monthly_snaps: dict[str, list[dict]] = {}
     for snap in snapshots:
         month_key = snap["date"][:7]  # YYYY-MM
-        if month_key not in monthly:
-            monthly[month_key] = {"first": snap["total_value"], "last": snap["total_value"]}
-        monthly[month_key]["last"] = snap["total_value"]
+        monthly_snaps.setdefault(month_key, []).append(snap)
+
+    # We also need the last snapshot of the previous month as the starting point
+    sorted_months = sorted(monthly_snaps.keys())
 
     result = []
-    for period, vals in sorted(monthly.items()):
-        if vals["first"] > 0:
-            ret = (vals["last"] / vals["first"] - 1) * 100
-            result.append({"period": period, "return_pct": round(ret, 2)})
+    for idx, month in enumerate(sorted_months):
+        snaps = monthly_snaps[month]
+        if len(snaps) < 1:
+            continue
+
+        # Determine start: last snapshot of previous month, or first of this month
+        if idx > 0:
+            prev_month = sorted_months[idx - 1]
+            prev_snaps = monthly_snaps[prev_month]
+            start_snap = prev_snaps[-1]
+        else:
+            # First month — use first snapshot as start, compute from second
+            if len(snaps) < 2:
+                continue
+            start_snap = snaps[0]
+            snaps = snaps[1:]
+
+        # Compute TWR for this month's daily sub-periods
+        cumulative = 1.0
+        prev = start_snap
+        for curr in snaps:
+            prev_val = prev["total_value"]
+            curr_val = curr["total_value"]
+
+            # Daily cash flow delta
+            curr_cf = curr.get("cash_flow") or 0
+            prev_cf = prev.get("cash_flow") or 0
+            daily_flow = curr_cf - prev_cf
+
+            # Adjust starting value for the cash flow
+            adjusted_prev = prev_val + daily_flow
+            if adjusted_prev > 0:
+                cumulative *= curr_val / adjusted_prev
+
+            prev = curr
+
+        ret = (cumulative - 1) * 100
+        result.append({"period": month, "return_pct": round(ret, 2)})
 
     return result
 
@@ -339,6 +539,7 @@ def compute_sector_allocation(tickers: list[str], values: dict[str, float]) -> l
     import yfinance as yf
 
     sector_values: dict[str, float] = defaultdict(float)
+    sector_tickers: dict[str, list[dict]] = defaultdict(list)
 
     for ticker in tickers:
         yf_ticker = normalize_ticker(ticker)
@@ -368,15 +569,22 @@ def compute_sector_allocation(tickers: list[str], values: dict[str, float]) -> l
                     sector = "Unknown"
         except Exception:
             sector = "Unknown"
-        sector_values[sector] += values.get(ticker, 0)
+        ticker_val = values.get(ticker, 0)
+        sector_values[sector] += ticker_val
+        sector_tickers[sector].append({"ticker": ticker, "value": round(ticker_val, 2)})
 
     total = sum(sector_values.values())
     result = []
     for sector, value in sorted(sector_values.items(), key=lambda x: -x[1]):
+        # Sort tickers within sector by value descending
+        holdings = sorted(sector_tickers[sector], key=lambda x: -x["value"])
+        for h in holdings:
+            h["weight_pct"] = round(h["value"] / total * 100, 2) if total > 0 else 0
         result.append({
             "sector": sector,
             "value": round(value, 2),
             "weight_pct": round(value / total * 100, 2) if total > 0 else 0,
+            "tickers": holdings,
         })
 
     return result
