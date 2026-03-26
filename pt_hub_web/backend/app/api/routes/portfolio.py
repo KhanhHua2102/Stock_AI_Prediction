@@ -910,22 +910,31 @@ async def get_dividends(portfolio_id: int, group_by: str = Query(default="month"
     from app.services.portfolio_metrics import compute_dividend_summary
 
     db = _get_portfolio_db()
-    if not db.get_portfolio(portfolio_id):
+    portfolio = db.get_portfolio(portfolio_id)
+    if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
+    display_ccy = portfolio["currency"]
+    holdings = db.get_holdings(portfolio_id)
+    ticker_currency = {h["ticker"]: h.get("currency") for h in holdings}
+
     div_txns = db.get_dividend_transactions(portfolio_id)
-    result = compute_dividend_summary(div_txns, group_by)
+    result = await asyncio.to_thread(
+        compute_dividend_summary, div_txns, group_by, ticker_currency, display_ccy
+    )
     return {"data": result, "group_by": group_by}
 
 
 @router.get("/portfolios/{portfolio_id}/allocation")
 async def get_allocation(portfolio_id: int):
-    from app.services.portfolio_metrics import compute_sector_allocation, fetch_live_prices
+    from app.services.portfolio_metrics import compute_sector_allocation, fetch_live_prices, fetch_fx_rate
 
     db = _get_portfolio_db()
-    if not db.get_portfolio(portfolio_id):
+    portfolio = db.get_portfolio(portfolio_id)
+    if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
 
+    display_ccy = portfolio["currency"]
     holdings = db.get_holdings(portfolio_id)
     active = [h for h in holdings if h["quantity"] > 0]
     if not active:
@@ -933,7 +942,19 @@ async def get_allocation(portfolio_id: int):
 
     tickers = [h["ticker"] for h in active]
     prices = await asyncio.to_thread(fetch_live_prices, tickers)
-    values = {h["ticker"]: h["quantity"] * prices.get(h["ticker"], h["avg_cost"]) for h in active}
+
+    # Fetch FX rates for foreign-currency holdings
+    fx_rates: dict[str, float] = {}
+    for h in active:
+        ccy = h.get("currency")
+        if ccy and ccy != display_ccy and ccy not in fx_rates:
+            fx_rates[ccy] = await asyncio.to_thread(fetch_fx_rate, ccy, display_ccy)
+
+    values = {}
+    for h in active:
+        ccy = h.get("currency")
+        fx = fx_rates.get(ccy, 1.0) if ccy else 1.0
+        values[h["ticker"]] = h["quantity"] * prices.get(h["ticker"], h["avg_cost"]) * fx
 
     result = await asyncio.to_thread(compute_sector_allocation, tickers, values)
     return {"data": result}

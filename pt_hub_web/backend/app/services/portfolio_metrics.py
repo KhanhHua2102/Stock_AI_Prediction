@@ -297,8 +297,20 @@ def compute_monthly_returns(snapshots: list[dict]) -> list[dict]:
     return result
 
 
-def compute_dividend_summary(transactions: list[dict], group_by: str = "month") -> list[dict]:
-    """Aggregate dividend transactions by month or year."""
+def compute_dividend_summary(
+    transactions: list[dict],
+    group_by: str = "month",
+    ticker_currency: dict[str, str | None] | None = None,
+    display_currency: str = "AUD",
+) -> list[dict]:
+    """Aggregate dividend transactions by month or year, with FX conversion."""
+    # Build FX rates for foreign-currency tickers
+    fx_rates: dict[str, float] = {}
+    if ticker_currency:
+        for ccy in set(c for c in ticker_currency.values() if c and c != display_currency):
+            if ccy not in fx_rates:
+                fx_rates[ccy] = fetch_fx_rate(ccy, display_currency)
+
     buckets: dict[str, float] = defaultdict(float)
 
     for txn in transactions:
@@ -306,6 +318,11 @@ def compute_dividend_summary(transactions: list[dict], group_by: str = "month") 
             continue
         date = txn["date"]
         amount = txn["price"] * txn["quantity"] if txn["quantity"] > 0 else txn["price"]
+
+        # Apply FX conversion
+        ccy = (ticker_currency or {}).get(txn.get("ticker"))
+        if ccy and ccy != display_currency:
+            amount *= fx_rates.get(ccy, 1.0)
 
         if group_by == "year":
             key = date[:4]
@@ -389,12 +406,20 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
     if not first_date:
         return
 
+    portfolio = portfolio_db.get_portfolio(portfolio_id)
+    display_currency = portfolio["currency"] if portfolio else "AUD"
+
     # Get all tickers ever traded (not just current holdings)
     txns, _ = portfolio_db.get_transactions(portfolio_id, limit=100000)
     txns.sort(key=lambda t: t["date"])
     all_tickers = sorted(set(t["ticker"] for t in txns))
     if not all_tickers:
         return
+
+    # Build ticker -> currency map from holdings
+    ticker_currency: dict[str, str | None] = {}
+    for h in holdings:
+        ticker_currency[h["ticker"]] = h.get("currency")
 
     existing = portfolio_db.get_snapshots(portfolio_id)
     existing_dates = {s["date"] for s in existing}
@@ -422,6 +447,39 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
 
     if not price_history:
         return
+
+    # Fetch historical FX rates for foreign-currency tickers
+    fx_history: dict[str, dict[str, float]] = {}  # "USDAUD" -> {date: rate}
+    fx_pairs_needed = set()
+    for ticker, ccy in ticker_currency.items():
+        if ccy and ccy != display_currency:
+            fx_pairs_needed.add((ccy, display_currency))
+    for from_ccy, to_ccy in fx_pairs_needed:
+        pair = f"{from_ccy}{to_ccy}=X"
+        try:
+            df = yf.download(pair, start=first_date, end=end.strftime("%Y-%m-%d"), interval="1d", progress=False)
+            if df is not None and not df.empty:
+                closes = df["Close"].squeeze()
+                key = f"{from_ccy}{to_ccy}"
+                fx_history[key] = {}
+                for date, rate in closes.items():
+                    fx_history[key][date.strftime("%Y-%m-%d")] = float(rate)
+        except Exception as e:
+            logger.warning(f"Failed to fetch FX history for {pair}: {e}")
+
+    last_known_fx: dict[str, float] = {}
+
+    def get_fx(from_ccy: str, to_ccy: str, date_str: str) -> float:
+        if from_ccy == to_ccy:
+            return 1.0
+        key = f"{from_ccy}{to_ccy}"
+        hist = fx_history.get(key)
+        if hist:
+            rate = hist.get(date_str)
+            if rate is not None:
+                last_known_fx[key] = rate
+                return rate
+        return last_known_fx.get(key, 1.0)
 
     # Group transactions by date for replay
     txns_by_date: dict[str, list[dict]] = defaultdict(list)
@@ -483,11 +541,20 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
             if current_holdings[ticker] < -0.0001:
                 current_holdings[ticker] = 0
 
-        # Compute portfolio value from current holdings
+        # Update FX cache for this date
+        for key in fx_history:
+            rate = fx_history[key].get(date_str)
+            if rate is not None:
+                last_known_fx[key] = rate
+
+        # Compute portfolio value from current holdings (with FX conversion)
         daily_value = 0.0
         for ticker, qty in current_holdings.items():
             if qty > 0:
-                daily_value += qty * get_price(ticker, date_str)
+                price = get_price(ticker, date_str)
+                ccy = ticker_currency.get(ticker)
+                fx = get_fx(ccy, display_currency, date_str) if ccy else 1.0
+                daily_value += qty * price * fx
 
         is_new = date_str not in existing_dates
         if daily_value > 0 and (is_new or force_deposits):
