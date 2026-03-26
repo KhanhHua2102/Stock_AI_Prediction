@@ -488,8 +488,8 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
 
     # Replay transactions day-by-day to compute accurate holdings + cash flows
     current_holdings: dict[str, float] = defaultdict(float)  # ticker -> qty
+    ticker_cost: dict[str, float] = defaultdict(float)  # ticker -> cost basis
     cumulative_deposit = 0.0
-    total_cost = 0.0
 
     # Helper: get price for ticker on date (with fallback to most recent)
     last_known_price: dict[str, float] = {}
@@ -506,31 +506,45 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
     while current <= end:
         date_str = current.strftime("%Y-%m-%d")
 
-        # Update prices cache for this date
+        # Update caches for this date (before processing transactions)
         for ticker in price_history:
             p = price_history[ticker].get(date_str)
             if p is not None:
                 last_known_price[ticker] = p
+        for key in fx_history:
+            rate = fx_history[key].get(date_str)
+            if rate is not None:
+                last_known_fx[key] = rate
 
-        # Apply transactions for this date
+        # Apply transactions for this date (convert to display currency)
         for txn in txns_by_date.get(date_str, []):
             ticker = txn["ticker"]
             qty = txn["quantity"]
             price = txn.get("price", 0) or 0
             fees = txn.get("fees", 0) or 0
+            ccy = ticker_currency.get(ticker)
+            fx = get_fx(ccy, display_currency, date_str) if ccy else 1.0
 
             if txn["type"] == "BUY":
                 current_holdings[ticker] += qty
-                cumulative_deposit += qty * price + fees
-                total_cost += qty * price + fees
+                cost_in_display = (qty * price + fees) * fx
+                ticker_cost[ticker] += cost_in_display
+                # Cash flow uses market value of shares added (not cost paid)
+                # so TWR correctly strips out the deposit's effect on portfolio value
+                market_price = get_price(ticker, date_str)
+                market_val_added = qty * market_price * fx + fees * fx
+                cumulative_deposit += market_val_added
             elif txn["type"] == "SELL":
+                # Reduce cost proportionally for this ticker
+                prev_qty = current_holdings[ticker]
                 current_holdings[ticker] -= qty
-                cumulative_deposit -= qty * price - fees
-                # Reduce cost proportionally
-                if current_holdings[ticker] + qty > 0:
-                    cost_per_unit = total_cost / max(sum(current_holdings.values()), 1)
-                    total_cost -= qty * cost_per_unit
-                total_cost = max(total_cost, 0)
+                if prev_qty > 0:
+                    sold_fraction = min(qty / prev_qty, 1.0)
+                    ticker_cost[ticker] *= (1 - sold_fraction)
+                # Cash flow uses market value of shares removed
+                market_price = get_price(ticker, date_str)
+                market_val_removed = qty * market_price * fx - fees * fx
+                cumulative_deposit -= market_val_removed
             elif txn["type"] == "SPLIT":
                 if qty > 0:
                     current_holdings[ticker] *= qty
@@ -541,12 +555,6 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
             if current_holdings[ticker] < -0.0001:
                 current_holdings[ticker] = 0
 
-        # Update FX cache for this date
-        for key in fx_history:
-            rate = fx_history[key].get(date_str)
-            if rate is not None:
-                last_known_fx[key] = rate
-
         # Compute portfolio value from current holdings (with FX conversion)
         daily_value = 0.0
         for ticker, qty in current_holdings.items():
@@ -556,6 +564,7 @@ def backfill_snapshots(portfolio_db, portfolio_id: int, holdings: list[dict], fo
                 fx = get_fx(ccy, display_currency, date_str) if ccy else 1.0
                 daily_value += qty * price * fx
 
+        total_cost = sum(ticker_cost.values())
         is_new = date_str not in existing_dates
         if daily_value > 0 and (is_new or force_deposits):
             portfolio_db.upsert_snapshot(

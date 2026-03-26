@@ -786,8 +786,12 @@ async def get_holdings(portfolio_id: int):
             summary["annualised_return"] = round((total_return_factor ** (365.0 / days) - 1) * 100, 2)
         else:
             summary["annualised_return"] = compute_annualised_return(values[0], values[-1], days) if days > 0 else 0
-        # Daily returns for Sharpe
-        daily_rets = [(values[i] / values[i-1] - 1) for i in range(1, len(values)) if values[i-1] > 0]
+        # Daily returns for Sharpe — use TWR-adjusted returns to exclude deposit/withdrawal noise
+        if twr and len(twr) >= 2:
+            twr_factors = [1 + t["cumulative_return"] / 100 for t in twr]
+            daily_rets = [(twr_factors[i] / twr_factors[i-1] - 1) for i in range(1, len(twr_factors)) if twr_factors[i-1] > 0]
+        else:
+            daily_rets = [(values[i] / values[i-1] - 1) for i in range(1, len(values)) if values[i-1] > 0]
         summary["sharpe_ratio"] = compute_sharpe_ratio(daily_rets)
         summary["max_drawdown"] = compute_max_drawdown(values)
         # Beta vs benchmark — align portfolio returns to benchmark trading dates
@@ -799,18 +803,17 @@ async def get_holdings(portfolio_id: int):
             # Build date-indexed snapshot values for aligned lookup
             snap_by_date = {s["date"]: s["total_value"] for s in snapshots}
             bm_prices = [100 * (1 + d["cumulative_return"] / 100) for d in benchmark_data]
-            bm_daily = [(bm_prices[i] / bm_prices[i-1] - 1) for i in range(1, len(bm_prices)) if bm_prices[i-1] > 0]
-            # Portfolio returns only on benchmark trading dates
+            # Portfolio returns only on benchmark trading dates — skip dates with missing snapshots
             bm_date_list = [d["date"] for d in benchmark_data]
             port_aligned = []
+            bm_aligned = []
             for i in range(1, len(bm_date_list)):
                 curr_val = snap_by_date.get(bm_date_list[i])
                 prev_val = snap_by_date.get(bm_date_list[i - 1])
-                if curr_val and prev_val and prev_val > 0:
+                if curr_val and prev_val and prev_val > 0 and bm_prices[i-1] > 0:
                     port_aligned.append(curr_val / prev_val - 1)
-                else:
-                    port_aligned.append(0.0)
-            summary["beta"] = compute_portfolio_beta(port_aligned, bm_daily)
+                    bm_aligned.append(bm_prices[i] / bm_prices[i-1] - 1)
+            summary["beta"] = compute_portfolio_beta(port_aligned, bm_aligned)
         else:
             summary["beta"] = 0
     else:
@@ -819,27 +822,14 @@ async def get_holdings(portfolio_id: int):
         summary["max_drawdown"] = 0
         summary["beta"] = 0
 
-    # Save yesterday's snapshot if missing (today's market data may not be final)
-    # Compute cumulative cash_flow from transactions so TWR calculation stays correct
+    # Save yesterday's snapshot if missing — delegate to backfill for correct TWR cash flows
     if summary["total_value"] > 0:
         from datetime import timedelta
+        from app.services.portfolio_metrics import backfill_snapshots
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
         existing = db.get_snapshots(portfolio_id, start_date=yesterday, end_date=yesterday)
         if not existing:
-            txns_all, _ = db.get_transactions(portfolio_id, limit=100000)
-            cumulative_cf = 0.0
-            for t in txns_all:
-                if t["date"] > yesterday:
-                    break
-                qty = t.get("quantity", 0) or 0
-                price = t.get("price", 0) or 0
-                fees = t.get("fees", 0) or 0
-                if t["type"] == "BUY":
-                    cumulative_cf += qty * price + fees
-                elif t["type"] == "SELL":
-                    cumulative_cf -= qty * price - fees
-            db.upsert_snapshot(portfolio_id, yesterday, summary["total_value"], summary["total_cost"],
-                               cash_flow=round(cumulative_cf, 2))
+            await asyncio.to_thread(backfill_snapshots, db, portfolio_id, holdings, force_deposits=False)
 
     return summary
 
