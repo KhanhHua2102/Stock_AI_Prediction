@@ -3,6 +3,8 @@ import { usePortfolioStore } from '../../store/portfolioStore';
 import { useAnalysisStore } from '../../store/analysisStore';
 import { usePortfolioAnalysisStore } from '../../store/portfolioAnalysisStore';
 import { usePortfolioDashboard } from '../../hooks/usePortfolioDashboard';
+
+const dt = (t: string) => t.replace(/:.*$/, '');
 import { AnalysisLogStream } from './AnalysisLogStream';
 import { AnalysisProgressBar } from './AnalysisProgressBar';
 import type { AllocationRecommendation, PortfolioAnalysisResult } from '../../store/portfolioAnalysisStore';
@@ -99,7 +101,7 @@ function AllocationBar({ alloc }: { alloc: AllocationRecommendation }) {
   const dc = DECISION_COLORS[alloc.decision] || DECISION_COLORS.HOLD;
   return (
     <div className="flex items-center gap-3 py-1.5">
-      <span className="w-16 text-xs font-bold truncate" style={{ color: '#ECEDEE' }}>{alloc.ticker}</span>
+      <span className="w-16 text-xs font-bold truncate" style={{ color: '#ECEDEE' }}>{dt(alloc.ticker)}</span>
       <div className="flex-1 space-y-1">
         <div className="flex items-center gap-2">
           <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: '#27272a' }}>
@@ -251,7 +253,7 @@ export function PortfolioAnalysisView() {
           <div>
             {activeHoldings.map((h, idx) => (
               <label
-                key={h.ticker}
+                key={dt(h.ticker)}
                 className="flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors"
                 style={{
                   background: selectedTickers.has(h.ticker) ? 'rgba(99,102,241,0.08)' : 'transparent',
@@ -272,7 +274,7 @@ export function PortfolioAnalysisView() {
                   style={{ accentColor: '#006FEE' }}
                 />
                 <span className="font-bold text-sm" style={{ color: selectedTickers.has(h.ticker) ? '#ECEDEE' : '#a1a1aa' }}>
-                  {h.ticker}
+                  {dt(h.ticker)}
                 </span>
                 <span className="text-xs ml-auto font-mono" style={{ color: '#a1a1aa' }}>
                   ${h.market_value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -429,13 +431,13 @@ export function PortfolioAnalysisView() {
                     const dc = DECISION_COLORS[r.decision] || DECISION_COLORS.HOLD;
                     return (
                       <tr
-                        key={r.ticker}
+                        key={dt(r.ticker)}
                         className="last:border-0 transition-colors"
                         style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.15)' }}
                         onMouseEnter={(e) => { e.currentTarget.style.background = '#27272a'; }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                       >
-                        <td className="px-4 py-2.5 font-bold" style={{ color: '#ECEDEE' }}>{r.ticker}</td>
+                        <td className="px-4 py-2.5 font-bold" style={{ color: '#ECEDEE' }}>{dt(r.ticker)}</td>
                         <td className="px-4 py-2.5 text-center">
                           <span
                             className="inline-block px-2.5 py-0.5 rounded-md text-xs font-bold"

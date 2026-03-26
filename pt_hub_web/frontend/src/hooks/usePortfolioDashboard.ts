@@ -10,6 +10,7 @@ import type {
   MonthlyReturn,
   DrawdownPoint,
   StockBreakdown,
+  UpcomingEvent,
 } from '../services/types';
 
 export interface DashboardData {
@@ -77,8 +78,21 @@ export function usePortfolioDashboard(portfolioId: number | null) {
     }
   }, [queryClient, portfolioId]);
 
+  // Upcoming events — separate query so it doesn't block dashboard load
+  const eventsQuery = useQuery({
+    queryKey: ['portfolio-events', portfolioId],
+    queryFn: async () => {
+      const res = await portfolioApi.getUpcomingEvents(portfolioId!);
+      return res.data;
+    },
+    enabled: portfolioId !== null,
+    staleTime: 1000 * 60 * 30, // 30 min — events don't change often
+  });
+
   return {
     data: query.data ?? EMPTY,
+    events: eventsQuery.data as UpcomingEvent[] | undefined ?? [],
+    eventsLoading: eventsQuery.isLoading,
     isLoading: query.isLoading,
     isFetching: query.isFetching,
     isPlaceholderData: query.isPlaceholderData,

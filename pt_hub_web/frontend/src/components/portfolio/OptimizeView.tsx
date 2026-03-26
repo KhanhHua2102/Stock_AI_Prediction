@@ -3,6 +3,8 @@ import { useSettingsStore, selectTickers } from '../../store/settingsStore';
 import { portfolioApi } from '../../services/api';
 import type { PortfolioOptimizationResult, RebalanceResult, CorrelationResult } from '../../services/types';
 
+const dt = (t: string) => t.replace(/:.*$/, '');
+
 type Strategy = 'mean-variance' | 'equal-weight';
 type RebalanceStrategy = 'rebalance' | 'buy-only';
 type InputMode = 'qty-price' | 'value';
@@ -180,7 +182,7 @@ export function OptimizeView() {
                     onChange={() => toggleTicker(ticker)}
                   />
                   <span className="font-medium" style={{ color: selectedTickers.includes(ticker) ? '#ECEDEE' : '#a1a1aa' }}>
-                    {ticker}
+                    {dt(ticker)}
                   </span>
                 </label>
               ))}
@@ -224,9 +226,9 @@ export function OptimizeView() {
               <div className="rounded-xl p-6" style={{ background: '#18181b', border: '1px solid #27272a' }}>
                 <div className="space-y-6">
                   {results.assets.sort((a, b) => b.weight - a.weight).map(asset => (
-                    <div key={asset.ticker} className="space-y-2">
+                    <div key={dt(asset.ticker)} className="space-y-2">
                       <div className="flex justify-between items-end">
-                        <span className="text-lg font-bold" style={{ color: '#ECEDEE' }}>{asset.ticker}</span>
+                        <span className="text-lg font-bold" style={{ color: '#ECEDEE' }}>{dt(asset.ticker)}</span>
                         <span className="font-mono text-xl" style={{ color: '#006FEE' }}>{(asset.weight * 100).toFixed(1)}%</span>
                       </div>
                       <div className="w-full h-3 rounded-full overflow-hidden" style={{ background: '#27272a' }}>
@@ -311,14 +313,14 @@ export function OptimizeView() {
                 <tr>
                   <th className="px-3 py-2 text-xs" style={{ color: '#a1a1aa' }} />
                   {correlation.tickers.map(t => (
-                    <th key={t} className="px-3 py-2 text-xs font-semibold text-center" style={{ color: '#ECEDEE' }}>{t}</th>
+                    <th key={t} className="px-3 py-2 text-xs font-semibold text-center" style={{ color: '#ECEDEE' }}>{dt(t)}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {correlation.tickers.map((rowTicker, i) => (
                   <tr key={rowTicker}>
-                    <td className="px-3 py-2 text-xs font-semibold" style={{ color: '#ECEDEE' }}>{rowTicker}</td>
+                    <td className="px-3 py-2 text-xs font-semibold" style={{ color: '#ECEDEE' }}>{dt(rowTicker)}</td>
                     {correlation.matrix[i].map((val, j) => {
                       const abs = Math.abs(val);
                       const isIdentity = i === j;
@@ -375,8 +377,8 @@ export function OptimizeView() {
                 </thead>
                 <tbody>
                   {holdings.map((h, i) => (
-                    <tr key={h.ticker} className="last:border-0" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.15)' }}>
-                      <td className="px-6 py-3"><span className="font-bold" style={{ color: '#ECEDEE' }}>{h.ticker}</span></td>
+                    <tr key={dt(h.ticker)} className="last:border-0" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.15)' }}>
+                      <td className="px-6 py-3"><span className="font-bold" style={{ color: '#ECEDEE' }}>{dt(h.ticker)}</span></td>
                       <td className="px-6 py-3">
                         <button
                           onClick={() => toggleHoldingMode(i)}
@@ -508,8 +510,8 @@ export function OptimizeView() {
                   </thead>
                   <tbody>
                     {rebalanceResult.actions.sort((a, b) => b.dollar_amount - a.dollar_amount).map(action => (
-                      <tr key={action.ticker} className="last:border-0" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.15)' }}>
-                        <td className="px-6 py-3"><span className="font-bold" style={{ color: '#ECEDEE' }}>{action.ticker}</span></td>
+                      <tr key={dt(action.ticker)} className="last:border-0" style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.15)' }}>
+                        <td className="px-6 py-3"><span className="font-bold" style={{ color: '#ECEDEE' }}>{dt(action.ticker)}</span></td>
                         <td className="px-6 py-3 text-center">
                           <span
                             className="inline-block px-2.5 py-0.5 rounded-full text-xs font-bold"

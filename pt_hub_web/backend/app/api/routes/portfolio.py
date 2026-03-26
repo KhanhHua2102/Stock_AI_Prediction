@@ -791,28 +791,44 @@ async def get_holdings(portfolio_id: int):
             twr_factors = [1 + t["cumulative_return"] / 100 for t in twr]
             daily_rets = [(twr_factors[i] / twr_factors[i-1] - 1) for i in range(1, len(twr_factors)) if twr_factors[i-1] > 0]
         else:
-            daily_rets = [(values[i] / values[i-1] - 1) for i in range(1, len(values)) if values[i-1] > 0]
+            # Fallback: compute cash-flow-adjusted daily returns from snapshots directly
+            daily_rets = []
+            for i in range(1, len(snapshots)):
+                prev_val = snapshots[i - 1]["total_value"]
+                curr_val = snapshots[i]["total_value"]
+                daily_flow = (snapshots[i].get("cash_flow") or 0) - (snapshots[i - 1].get("cash_flow") or 0)
+                adjusted_prev = prev_val + daily_flow
+                if adjusted_prev > 0:
+                    daily_rets.append(curr_val / adjusted_prev - 1)
         summary["sharpe_ratio"] = compute_sharpe_ratio(daily_rets)
-        summary["max_drawdown"] = compute_max_drawdown(values)
+        # Use TWR series for drawdown so deposits don't inflate the peak
+        if twr:
+            twr_values = [1 + t["cumulative_return"] / 100 for t in twr]
+            summary["max_drawdown"] = compute_max_drawdown(twr_values)
+        else:
+            summary["max_drawdown"] = compute_max_drawdown(values)
         # Beta vs benchmark — align portfolio returns to benchmark trading dates
         benchmark_data = await asyncio.to_thread(
             compute_benchmark_returns, portfolio["benchmark"], snapshots[0]["date"], snapshots[-1]["date"]
         )
         if len(benchmark_data) >= 2:
-            bm_dates = {d["date"] for d in benchmark_data}
-            # Build date-indexed snapshot values for aligned lookup
-            snap_by_date = {s["date"]: s["total_value"] for s in snapshots}
+            # Build date-indexed snapshots for aligned lookup
+            snap_by_date = {s["date"]: s for s in snapshots}
             bm_prices = [100 * (1 + d["cumulative_return"] / 100) for d in benchmark_data]
-            # Portfolio returns only on benchmark trading dates — skip dates with missing snapshots
+            # Portfolio returns only on benchmark trading dates — use cash-flow-adjusted returns
             bm_date_list = [d["date"] for d in benchmark_data]
             port_aligned = []
             bm_aligned = []
             for i in range(1, len(bm_date_list)):
-                curr_val = snap_by_date.get(bm_date_list[i])
-                prev_val = snap_by_date.get(bm_date_list[i - 1])
-                if curr_val and prev_val and prev_val > 0 and bm_prices[i-1] > 0:
-                    port_aligned.append(curr_val / prev_val - 1)
-                    bm_aligned.append(bm_prices[i] / bm_prices[i-1] - 1)
+                curr_snap = snap_by_date.get(bm_date_list[i])
+                prev_snap = snap_by_date.get(bm_date_list[i - 1])
+                if curr_snap and prev_snap and prev_snap["total_value"] > 0 and bm_prices[i-1] > 0:
+                    # Adjust for cash flows between the two dates
+                    daily_flow = (curr_snap.get("cash_flow") or 0) - (prev_snap.get("cash_flow") or 0)
+                    adjusted_prev = prev_snap["total_value"] + daily_flow
+                    if adjusted_prev > 0:
+                        port_aligned.append(curr_snap["total_value"] / adjusted_prev - 1)
+                        bm_aligned.append(bm_prices[i] / bm_prices[i-1] - 1)
             summary["beta"] = compute_portfolio_beta(port_aligned, bm_aligned)
         else:
             summary["beta"] = 0
@@ -860,7 +876,7 @@ async def get_value_history(portfolio_id: int):
     snapshots = [s for s in snapshots if s["date"] < today]
 
     return {"data": [
-        {"date": s["date"], "value": s["total_value"], "deposits": s.get("cash_flow", 0) or s["total_cost"]}
+        {"date": s["date"], "value": s["total_value"], "deposits": s.get("cash_flow") if s.get("cash_flow") is not None else s["total_cost"]}
         for s in snapshots
     ]}
 
@@ -966,7 +982,7 @@ async def get_returns(portfolio_id: int):
 
 @router.get("/portfolios/{portfolio_id}/drawdown")
 async def get_drawdown(portfolio_id: int):
-    from app.services.portfolio_metrics import compute_drawdown
+    from app.services.portfolio_metrics import compute_twr_returns
 
     db = _get_portfolio_db()
     if not db.get_portfolio(portfolio_id):
@@ -974,7 +990,18 @@ async def get_drawdown(portfolio_id: int):
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     snapshots = [s for s in db.get_snapshots(portfolio_id) if s["date"] < today_str]
-    result = compute_drawdown(snapshots)
+    twr = compute_twr_returns(snapshots)
+
+    # Compute drawdown from TWR cumulative return (deposit-adjusted)
+    result = []
+    peak = 0.0
+    for point in twr:
+        cum = point["cumulative_return"]  # percentage
+        factor = 1 + cum / 100
+        peak = max(peak, factor)
+        dd = ((factor - peak) / peak * 100) if peak > 0 else 0
+        result.append({"date": point["date"], "drawdown": round(dd, 4)})
+
     return {"data": result}
 
 
@@ -1001,6 +1028,10 @@ async def get_stock_breakdown(portfolio_id: int):
         ccy = h.get("currency")
         if ccy and ccy != display_ccy and ccy not in fx_rates:
             fx_rates[ccy] = await asyncio.to_thread(fetch_fx_rate, ccy, display_ccy)
+
+    # Get last sell date for closed positions
+    closed_tickers = [h["ticker"] for h in holdings if h["quantity"] < 0.0001]
+    close_dates = db.get_last_sell_dates(portfolio_id, closed_tickers)
 
     active = []
     closed = []
@@ -1037,9 +1068,28 @@ async def get_stock_breakdown(portfolio_id: int):
         if qty > 0.0001:
             active.append(entry)
         else:
+            entry["closed_date"] = close_dates.get(ticker)
             closed.append(entry)
 
     return {
         "data": sorted(active, key=lambda x: abs(x["total_return"]), reverse=True),
         "closed": sorted(closed, key=lambda x: abs(x["total_return"]), reverse=True),
     }
+
+
+@router.get("/portfolios/{portfolio_id}/upcoming-events")
+async def get_upcoming_events(portfolio_id: int):
+    from app.services.portfolio_metrics import fetch_upcoming_events
+
+    db = _get_portfolio_db()
+    portfolio = db.get_portfolio(portfolio_id)
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    holdings = db.get_holdings(portfolio_id)
+    active_tickers = [h["ticker"] for h in holdings if h["quantity"] > 0.0001]
+    if not active_tickers:
+        return {"data": []}
+
+    events = fetch_upcoming_events(active_tickers)
+    return {"data": events}

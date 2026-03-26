@@ -249,6 +249,7 @@ class PortfolioDB:
             lots: dict[str, list[list[float]]] = defaultdict(list)
             realised: dict[str, float] = defaultdict(float)
             dividends: dict[str, float] = defaultdict(float)
+            total_invested: dict[str, float] = defaultdict(float)  # total cost ever bought
             currencies: dict[str, Optional[str]] = {}
 
             for r in rows:
@@ -265,6 +266,8 @@ class PortfolioDB:
                     # Cost includes fees spread across units
                     cost_per_share = price + (fees / qty if qty > 0 else 0)
                     lots[ticker].append([qty, cost_per_share])
+                    # Track total amount ever invested for this ticker (for closed position %)
+                    total_invested[ticker] = total_invested.get(ticker, 0) + qty * cost_per_share
 
                 elif txn_type == "SELL":
                     sell_proceeds_per_share = price - (fees / qty if qty > 0 else 0)
@@ -281,6 +284,9 @@ class PortfolioDB:
                             realised[ticker] += (sell_proceeds_per_share - lot[1]) * remaining
                             lot[0] -= remaining
                             remaining = 0
+                    # Clean up floating-point residual lots (e.g., 2.27e-13 shares)
+                    while lots[ticker] and lots[ticker][0][0] < 1e-8:
+                        lots[ticker].pop(0)
 
                 elif txn_type == "SPLIT":
                     # qty is the split ratio (e.g., 2.0 for 2-for-1)
@@ -300,6 +306,9 @@ class PortfolioDB:
                 total_qty = sum(lot[0] for lot in ticker_lots)
                 total_cost = sum(lot[0] * lot[1] for lot in ticker_lots)
                 avg_cost = total_cost / total_qty if total_qty > 0 else 0
+                # For closed positions (qty ~ 0), use total_invested as cost_basis
+                # so return % can be computed correctly
+                stored_cost = total_cost if total_qty > 0.0001 else total_invested.get(ticker, 0)
 
                 if total_qty > 0.0001 or realised.get(ticker, 0) != 0 or dividends.get(ticker, 0) != 0:
                     conn.execute(
@@ -310,7 +319,7 @@ class PortfolioDB:
                             portfolio_id,
                             ticker,
                             round(total_qty, 6),
-                            round(total_cost, 2),
+                            round(stored_cost, 2),
                             round(avg_cost, 4),
                             round(realised.get(ticker, 0), 2),
                             round(dividends.get(ticker, 0), 2),
@@ -328,11 +337,13 @@ class PortfolioDB:
                             (portfolio_id, ticker),
                         ).fetchone()
                         if not exists:
+                            # Store total_invested as cost_basis so closed positions can show return %
+                            hist_cost = round(total_invested.get(ticker, 0), 2)
                             conn.execute(
                                 """INSERT INTO holdings_cache
                                    (portfolio_id, ticker, quantity, cost_basis, avg_cost, realised_pnl, total_dividends, currency)
-                                   VALUES (?, ?, 0, 0, 0, ?, ?, ?)""",
-                                (portfolio_id, ticker, round(realised.get(ticker, 0), 2), round(dividends.get(ticker, 0), 2), currencies.get(ticker)),
+                                   VALUES (?, ?, 0, ?, 0, ?, ?, ?)""",
+                                (portfolio_id, ticker, hist_cost, round(realised.get(ticker, 0), 2), round(dividends.get(ticker, 0), 2), currencies.get(ticker)),
                             )
 
     def get_holdings(self, portfolio_id: int) -> list[dict]:
@@ -616,3 +627,16 @@ class PortfolioDB:
                 (portfolio_id,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_last_sell_dates(self, portfolio_id: int, tickers: list[str]) -> dict[str, str]:
+        """Return {ticker: last_sell_date} for the given tickers."""
+        if not tickers:
+            return {}
+        with self._lock, self._conn() as conn:
+            placeholders = ",".join("?" for _ in tickers)
+            rows = conn.execute(
+                f"SELECT ticker, MAX(date) as last_date FROM transactions "
+                f"WHERE portfolio_id = ? AND type = 'SELL' AND ticker IN ({placeholders}) GROUP BY ticker",
+                [portfolio_id] + tickers,
+            ).fetchall()
+            return {r["ticker"]: r["last_date"] for r in rows}

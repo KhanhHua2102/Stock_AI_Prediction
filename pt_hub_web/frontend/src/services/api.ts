@@ -23,6 +23,7 @@ import type {
   MonthlyReturn,
   DrawdownPoint,
   StockBreakdown,
+  UpcomingEvent,
 } from './types';
 
 const API_BASE = '/api';
@@ -298,6 +299,9 @@ export const portfolioApi = {
 
   getStockBreakdown: (portfolioId: number) =>
     fetchJson<{ data: StockBreakdown[]; closed: StockBreakdown[] }>(`/portfolio/portfolios/${portfolioId}/stock-breakdown`),
+
+  getUpcomingEvents: (portfolioId: number) =>
+    fetchJson<{ data: UpcomingEvent[] }>(`/portfolio/portfolios/${portfolioId}/upcoming-events`),
 };
 
 // Health check
