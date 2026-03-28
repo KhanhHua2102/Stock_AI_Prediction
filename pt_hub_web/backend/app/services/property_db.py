@@ -195,23 +195,26 @@ class PropertyDB:
         "projection_params",
     }
 
+    # Static mapping of allowed column names for UPDATE queries
+    _UPDATE_SQL = {
+        col: f'"{col}" = ?' for col in (
+            "name", "address", "suburb", "state", "postcode", "property_type",
+            "bedrooms", "bathrooms", "parking", "land_size_sqm",
+            "purchase_date", "purchase_price", "current_estimate",
+            "rental_income_weekly", "loan_amount", "loan_rate_pct", "notes",
+            "projection_params",
+        )
+    }
+
     def update_property(self, property_id: int, **kwargs) -> None:
         updates = {k: v for k, v in kwargs.items() if k in self._UPDATABLE and v is not None}
         if not updates:
             return
-        # Column names are validated against _UPDATABLE whitelist above
-        columns = list(updates.keys())
-        set_parts = []
-        for col in columns:
-            assert col in self._UPDATABLE, f"Invalid column: {col}"  # noqa: S101
-            set_parts.append(f'"{col}" = ?')
-        set_clause = ", ".join(set_parts)
+        set_clause = ", ".join(self._UPDATE_SQL[k] for k in updates)
         values = list(updates.values()) + [property_id]
+        sql = "UPDATE properties SET " + set_clause + ", updated_at = datetime('now') WHERE id = ?"
         with self._lock, self._conn() as conn:
-            conn.execute(
-                f"UPDATE properties SET {set_clause}, updated_at = datetime('now') WHERE id = ?",
-                values,
-            )
+            conn.execute(sql, values)
 
     def delete_property(self, property_id: int) -> None:
         with self._lock, self._conn() as conn:
