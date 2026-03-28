@@ -231,8 +231,11 @@ async def get_suburb_summary(suburb: str, state: str):
 async def refresh_suburb_data(suburb: str, state: str, postcode: str = Query(..., pattern=r"^\d{4}$")):
     """Fetch suburb metrics from all available external sources."""
     from app.services.property_data import refresh_suburb_data as _refresh
-    result = await _refresh(suburb.upper(), state.upper(), postcode)
-    return result
+    try:
+        result = await _refresh(suburb.upper(), state.upper(), postcode)
+        return result
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to refresh suburb data")
 
 
 # ── Favorite Suburbs ──────────────────────────────────────────

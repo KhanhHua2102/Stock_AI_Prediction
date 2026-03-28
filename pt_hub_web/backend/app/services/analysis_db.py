@@ -274,18 +274,18 @@ class AnalysisDB:
         """Get reports old enough for backtesting that don't have results yet."""
         with self._lock, self._conn() as conn:
             where_parts = [
-                f"created_at <= datetime('now', '-{min_age_days} days')",
+                "created_at <= datetime('now', ? || ' days')",
                 "id NOT IN (SELECT report_id FROM backtest_results)",
             ]
-            params: tuple = ()
+            params: list = [f"-{int(min_age_days)}"]
             if ticker:
                 where_parts.append("ticker = ?")
-                params = (ticker,)
+                params.append(ticker)
 
             where = "WHERE " + " AND ".join(where_parts)
             rows = conn.execute(
                 f"SELECT * FROM analysis_reports {where} ORDER BY created_at DESC",
-                params,
+                tuple(params),
             ).fetchall()
             return [self._row_to_dict(r) for r in rows]
 

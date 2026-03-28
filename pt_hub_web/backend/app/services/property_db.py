@@ -199,7 +199,13 @@ class PropertyDB:
         updates = {k: v for k, v in kwargs.items() if k in self._UPDATABLE and v is not None}
         if not updates:
             return
-        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        # Column names are validated against _UPDATABLE whitelist above
+        columns = list(updates.keys())
+        set_parts = []
+        for col in columns:
+            assert col in self._UPDATABLE, f"Invalid column: {col}"  # noqa: S101
+            set_parts.append(f'"{col}" = ?')
+        set_clause = ", ".join(set_parts)
         values = list(updates.values()) + [property_id]
         with self._lock, self._conn() as conn:
             conn.execute(

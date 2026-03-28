@@ -98,7 +98,7 @@ def _fetch_betashares_calendar() -> dict[str, list[dict]]:
             cal_table = tables[i + 1]
             cal_headers = re.findall(r"<th>(.*?)</th>", cal_table)
             if "Ex-Date" in cal_headers:
-                rows = re.findall(r"<tr>\s*((?:<td>.*?</td>\s*)+)</tr>", cal_table, re.DOTALL)
+                rows = re.findall(r"<tr>\s*(<td>.*?</td>(?:\s*<td>.*?</td>)*)\s*</tr>", cal_table, re.DOTALL)
                 for row in rows:
                     cells = re.findall(r"<td>(.*?)</td>", row)
                     if len(cells) >= 7:

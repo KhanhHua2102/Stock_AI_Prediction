@@ -112,9 +112,10 @@ class Settings(BaseSettings):
         if not found:
             lines.append(f"PT_API_KEY={self.api_key}")
         env_path.write_text("\n".join(lines) + "\n")
+        masked = self.api_key[:4] + "****" + self.api_key[-4:]
         print(f"\n{'='*60}")
         print("SECURITY: New API key generated and saved to .env")
-        print(f"API Key: {self.api_key}")
+        print(f"API Key: {masked}")
         print(f"{'='*60}\n")
 
     def get_cors_origins(self) -> List[str]:
