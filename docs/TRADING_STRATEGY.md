@@ -1,190 +1,272 @@
-# PowerTrader AI Trading Strategy & Methodology
+# Trading Strategy & Methodology
 
-This document provides a comprehensive analysis of PowerTrader AI's trading strategy, combining setup instructions with detailed technical methodology.
+This document describes the prediction system used by Stock AI Prediction — how models are trained, how signals are generated, and how the system decides what to show on the dashboard.
 
 ## Overview
 
-PowerTrader AI is a fully automated crypto trading system powered by a custom price prediction AI and a structured/tiered DCA (Dollar Cost Averaging) system. It implements a sophisticated multi-layered approach that combines machine learning predictions with systematic risk management.
+Stock AI Prediction uses a **pattern-matching predictor** (instance-based k-NN with learned reliability weights) to generate multi-timeframe trading signals. It is not a neural network or deep learning model — it works by comparing the current price pattern against a library of historical patterns and taking a weighted average of what happened next.
 
-## The AI Prediction System
+The system covers US (S&P 500, individual stocks), Australian (ASX ETFs/stocks), and Vietnamese (VNINDEX) markets.
+
+## The Prediction Algorithm
 
 ### What Type of AI Is This?
 
-"It's an instance-based (kNN/kernel-style) predictor with online per-instance reliability weighting, used as a multi-timeframe trading signal." - ChatGPT on the type of AI used in this trading bot.
+> "It's an instance-based (k-NN/kernel-style) predictor with online per-instance reliability weighting, used as a multi-timeframe trading signal."
 
-When people think AI, they usually think about LLM style AIs and neural networks. What many people don't realize is there are many types of Artificial Intelligence and Machine Learning - and the one in PowerTrader AI falls under the "Other" category.
+When people think AI, they usually think about LLMs and neural networks. The predictor here falls under **instance-based learning** — it stores examples (patterns) and makes predictions by finding the closest matches to the current situation.
 
-### How The AI Training Works
+### How It Works (Simple Version)
 
-When training for a coin, it goes through the entire history for that coin on multiple timeframes and saves each pattern it sees, along with what happens on the next candle AFTER the pattern. It uses these saved patterns to generate a predicted candle by taking a weighted average of the closest matches in memory to the current pattern in time.
+1. During **training**, the system walks through all historical candles for a ticker and saves each price pattern it sees, along with what the next candle's high and low were.
+2. During **prediction**, it compares the current price pattern against all stored patterns, finds the closest matches, and takes a weighted average of their outcomes.
+3. After each candle closes, it checks how accurate each pattern was and adjusts its weight up or down. Accurate patterns get more influence over time; inaccurate ones fade out.
 
-This weighted average output is done once for each timeframe, from 1 hour up to 1 week. Each timeframe gets its own predicted candle. The low and high prices from these candles are what are shown as the blue and orange horizontal lines on the price charts.
+## Training System
 
-After a candle closes, it checks what happened against what it predicted, and adjusts the weight for each "memory pattern" that was used to generate the weighted average, depending on how accurate each pattern was compared to what actually happened.
+### Data Sources
 
-Yes, it is EXTREMELY simple. Yes, it is STILL considered AI.
+| Market | Source | Intervals |
+| ------ | ------ | --------- |
+| ASX, US stocks | yfinance | 1h, 1d, 1wk |
+| VNINDEX | vnstock | 1H, 1D, 1W |
 
-## Complete Trading Strategy Breakdown
+Data is cached locally in `data/cache/{ticker}_{timeframe}.json` with a 6-hour freshness window. Historical data goes back ~730 days for intraday and maximum available for daily/weekly.
 
-### 1. Multi-Timeframe Neural Network Analysis
+### Timeframes
 
-The system analyzes **7 different timeframes** simultaneously:
+Training runs on two primary timeframes:
 
-- 1 hour, 2 hour, 4 hour, 8 hour, 12 hour, 1 day, 1 week
+- **1 day** — daily candle patterns
+- **1 week** — weekly candle patterns
 
-For each timeframe, it:
+Each timeframe is trained independently with its own set of memories and weights.
 
-- Uses historical candlestick data from KuCoin to train neural networks
-- Establishes dynamic **high/low boundary zones** based on AI predictions
-- Generates signals when current price breaks above (SHORT) or below (LONG) these boundaries
+### Memory Structure
 
-### 2. DCA (Dollar Cost Averaging) System
-
-The core trading strategy uses an **8-level DCA system** with predetermined percentage triggers:
+A "memory" is a stored pattern consisting of three parts:
 
 ```
-DCA Level 0: -2.5% (minimum drop to start buying)
-DCA Level 1: -5.0%
-DCA Level 2: -10.0%
-DCA Level 3: -15.0%
-DCA Level 4: -25.0%
-DCA Level 5: -35.0%
-DCA Level 6: -45.0%
-DCA Level 7: -50.0% (maximum drop)
+{percentage_change_pattern} {} {high_price_move} {} {low_price_move}
 ```
 
-### 3. Neural Signal Integration
+- **percentage_change_pattern**: Space-separated floats representing normalized price changes across recent candles: `(price - open) / open * 100`
+- **high_price_move**: The percentage move to the high of the next candle: `(high - open) / open * 100`
+- **low_price_move**: The percentage move to the low of the next candle: `(low - open) / open * 100`
 
-The AI component generates signals on a **0-7 scale**:
+Multiple memories are concatenated with `~` as a delimiter. All memories for a (ticker, timeframe) pair are stored together.
 
-- **Levels 4-7**: Map directly to DCA levels 0-3 for aggressive buying
-- **Lower levels (0-3)**: Used for less aggressive positions
-- The neural network analyzes price patterns, momentum, and boundary zones
+### Training Loop
 
-**A TRADE WILL START FOR A COIN IF THAT COIN REACHES A LONG LEVEL OF 3 OR HIGHER WHILE HAVING A SHORT LEVEL OF 0!**
+For each timeframe, the trainer walks through historical data:
 
-### 4. Trading Decision Logic
+```
+For each window position in historical price data:
+  1. Extract the current pattern (last N candles as % changes)
+  2. Compare against ALL stored memories using normalized RMSD
+  3. Find matches where difference <= perfect_threshold
+  4. If matches found:
+     - Take weighted average of their high/low moves
+     - Generate predicted high and low prices
+  5. If no matches: use the single closest memory as fallback
+  6. Compare prediction against actual outcome
+  7. Adjust weights:
+     - Prediction accurate → weight += 0.25
+     - Overestimated → weight -= 0.25
+     - Underestimated → weight -= 0.25
+  8. Store new pattern as a memory with initial weight 1.0
+```
 
-#### For determining when to start trades:
+### Pattern Matching Distance
 
-The AI's Thinker script sends a signal to start a trade for a coin if the ask price for the coin drops below at least 3 of the AI's predicted low prices for the coin (it predicts the currently active candle's high and low prices for each timeframe across all timeframes from 1hr to 1wk).
+The distance between two patterns is calculated as a normalized percentage difference:
 
-#### For determining when to DCA:
+```
+For each candle position:
+  diff = |current_value - memory_value| / ((current_value + memory_value) / 2) * 100
 
-It uses either the current price level from the AI that is tied to the current amount of DCA buys that have been done on the trade (for example, right after a trade starts when 3 blue lines get crossed, its first DCA won't happen until the price crosses the 4th line, so on so forth), or it uses the hardcoded drawdown % for its current level, whichever it hits first. It allows a max of 2 DCAs within a rolling 24hr window to keep from dumping all of your money in too quickly on coins that are having an extended downtrend!
+average_diff = sum(all diffs) / count
 
-#### For determining when to sell:
+Match if: average_diff <= perfect_threshold
+```
 
-The bot uses a trailing profit margin to maximize the potential gains. The margin line is set at either 5% gain if no DCA has happened on the trade, or 2.5% gain if any DCA has happened. The trailing margin gap is 0.5% (this is the amount the price has to go over the profit margin to begin raising the profit margin up to TRAIL after the price and maximize how much profit is gained once the price drops below the profit margin again and the bot sells the trade).
+### Adaptive Threshold
 
-### 5. Profit Management Strategy
+The `perfect_threshold` controls how strict pattern matching is:
 
-- **Entry Strategy**: DCA buys triggered by both percentage drops AND neural signals
-- **Exit Strategy**: Trailing profit margins starting at 5% with 0.5% trail gaps
-- **Position Sizing**: Each DCA level uses progressively larger position sizes
-- **Risk Control**: Maximum 2 DCA purchases per coin per 24-hour period
+- Starts at a moderate value
+- If more than 20 patterns match → **tighten** (decrease threshold, be more selective)
+- If fewer than 20 patterns match → **relax** (increase threshold, accept looser matches)
+- Range: 0.0 to 100.0
+- Goal: maintain approximately 20 good matches per prediction
 
-### 6. Complete Trading Flow
+This self-tuning mechanism ensures the system neither overfits to noise (too many matches) nor starves for data (too few matches).
 
-The system operates continuously with this logic:
+### Weight System
 
-1. **Monitor Phase**: Track all coins across 7 timeframes
-2. **Signal Generation**: Neural networks analyze boundaries and generate 0-7 signals
-3. **Entry Decision**: Combine price drops with neural signals to trigger DCA buys
-4. **Position Management**: Track all open positions and their profit/loss
-5. **Exit Decision**: Use trailing profit margins to lock in gains
-6. **Risk Management**: Limit frequency and size of new positions
+Three parallel weight arrays track reliability for different aspects:
 
-### 7. Key Risk Controls
+| Weight | Tracks | Range |
+| ------ | ------ | ----- |
+| `weights` | Close price prediction accuracy | 0.0 – 2.0 |
+| `weights_high` | High price prediction accuracy | 0.0 – 2.0 |
+| `weights_low` | Low price prediction accuracy | 0.0 – 2.0 |
 
-- **24-Hour Rate Limiting**: Max 2 DCA buys per coin per day
-- **Account Balance Monitoring**: Tracks available funds before each trade
-- **Training Requirements**: Only trades coins with fresh AI training data
-- **Boundary Validation**: Ensures neural predictions are within reasonable ranges
+- **Initial weight**: 1.0 for new patterns
+- **Adjustment**: +0.25 for correct predictions, -0.25 for incorrect
+- **Clamped** to [0.0, 2.0] — a pattern can never have more than 2× or less than 0× influence
 
-### 8. Unique Features
+### Persistence
 
-- **Multi-Asset Support**: Simultaneously trades BTC, ETH, BNB, XRP, DOGE
-- **Real-Time Adaptation**: Continuously updates neural boundaries based on market conditions
-- **Purple Zone Detection**: Special algorithm to find optimal entry zones between support/resistance
-- **Hybrid Data Sources**: Uses KuCoin for training, Kraken for live trading
+Training data is stored in two locations:
+
+| Storage | Location | Purpose |
+| ------- | -------- | ------- |
+| SQLite (primary) | `data/runtime.db` → `training_memory` table | Memories, weights, threshold per (ticker, timeframe) |
+| Text files (fallback) | `data/training/{TICKER}/` | Flat file backup |
+
+**Optimization**: An in-memory cache holds loaded memories during training. Writes are batched every 200 iterations using a dirty flag to reduce disk I/O.
+
+### Training Status
+
+Each ticker tracks its training state in the `trainer_status` table:
+
+| State | Meaning |
+| ----- | ------- |
+| `NOT_TRAINED` | No training data exists |
+| `TRAINING` | Trainer is currently running |
+| `PARTIAL` | Some timeframes trained, not all |
+| `TRAINED` / `FINISHED` | All timeframes complete |
+
+The `last_training_time` timestamp is used by the signal generator to check freshness (must be within 14 days).
+
+## Signal Generation
+
+### Runner Loop
+
+The signal generator (`pt_thinker.py`) runs continuously:
+
+```
+Loop (every ~150ms):
+  1. Sync active tickers from settings (hot-reload)
+  2. For each ticker:
+     a. Download current candle for each timeframe
+     b. Load trained memories from SQLite
+     c. Match current pattern against memories
+     d. Generate predicted high/low prices
+     e. Compute boundary prices
+     f. Determine signal (LONG / SHORT / WITHIN / INACTIVE)
+     g. Write results to database
+  3. Sleep 150ms
+```
+
+### Boundary Computation
+
+For each timeframe, the system computes a high boundary and low boundary:
+
+**Step 1 — Raw bounds from predictions:**
+
+```
+low_bound  = predicted_low  - (predicted_low  * 0.005)   # 0.5% below prediction
+high_bound = predicted_high + (predicted_high * 0.005)   # 0.5% above prediction
+```
+
+**Step 2 — Multi-level consolidation:**
+
+All bounds across timeframes are sorted and adjusted so they don't overlap or invert:
+
+- If the gap between consecutive bounds is less than 0.25%, they're nudged apart
+- If bounds are inverted (low > high), they're adjusted with small multipliers (0.9995 / 1.0005)
+- Results are remapped back to their original timeframes
+
+### Signal Types
+
+For each timeframe, the current price is compared against the boundaries:
+
+| Condition | Signal | Meaning |
+| --------- | ------ | ------- |
+| Price < low boundary | **LONG** | Price is below predicted range — potential buying opportunity |
+| Price > high boundary | **SHORT** | Price is above predicted range — potential selling opportunity |
+| Low ≤ Price ≤ High | **WITHIN** | Price is inside predicted range — no signal |
+| No trained data | **INACTIVE** | Timeframe has no model — cannot generate signal |
+
+### DCA Signal Aggregation
+
+The signals across all timeframes are aggregated into two counts:
+
+- **`long_dca_signal`**: Number of timeframes currently showing LONG
+- **`short_dca_signal`**: Number of timeframes currently showing SHORT
+
+A higher count means more timeframes agree on the direction, indicating a stronger signal. For example, if price is below the predicted low on 3 out of 4 timeframes, `long_dca_signal = 3`.
+
+### Profit Margin Calculation
+
+For each timeframe with an active signal, a margin percentage is calculated:
+
+```
+margin% = ((boundary_price - current_price) / current_price) * 100
+```
+
+These margins are averaged across all active timeframes, with a minimum floor of 0.25%. The result is stored as `long_profit_margin` and `short_profit_margin`.
+
+### Readiness Gates
+
+The system prevents premature signal output through three gates:
+
+1. **Trainer freshness**: Training data must be less than 14 days old. Stale tickers are set to INACTIVE.
+2. **Bounds version**: Boundaries must have been computed at least once (`bounds_version >= 1`).
+3. **Signal type**: Output must contain real LONG/SHORT/WITHIN signals, not startup placeholders.
+
+All three gates must pass before signals are written to the database.
+
+### Database Output
+
+Signals are written to the `ticker_signals` table:
+
+| Column | Type | Description |
+| ------ | ---- | ----------- |
+| `ticker` | TEXT (PK) | Stock/ETF ticker symbol |
+| `long_dca_signal` | INT | Count of timeframes in LONG |
+| `short_dca_signal` | INT | Count of timeframes in SHORT |
+| `long_onoff` | TEXT | "ON" or "OFF" |
+| `short_onoff` | TEXT | "ON" or "OFF" |
+| `long_profit_margin` | FLOAT | Average margin for LONG signals (≥ 0.25%) |
+| `short_profit_margin` | FLOAT | Average margin for SHORT signals (≥ 0.25%) |
+| `low_bound_prices` | JSON | Array of low boundary prices per timeframe |
+| `high_bound_prices` | JSON | Array of high boundary prices per timeframe |
+| `updated_at` | TIMESTAMP | Last update time |
+
+## How to Read the Dashboard
+
+### Predictions Tab
+
+Each ticker shows:
+
+- **Overall signal**: Aggregated direction across all timeframes (BUY / SELL / MIXED / NEUTRAL)
+- **Per-timeframe cards**: Each card shows signal strength, predicted high/low boundaries, and expected move %
+- **Signal strength**: Based on the count of timeframes agreeing on the direction
+
+### Charts Tab
+
+The candlestick chart displays:
+
+- Standard OHLCV price data
+- **Predicted boundary lines** overlaid — the high and low prices the model expects for the current candle
+
+When price breaks below the low boundary, that timeframe registers a LONG signal. When price breaks above the high boundary, it registers a SHORT signal.
+
+## Performance Optimizations
+
+| Optimization | Description |
+| ------------ | ----------- |
+| Memory cache | Pattern memories held in RAM with dirty-flag batch writes every 200 iterations |
+| Disk cache | Market data cached with 6-hour freshness window |
+| SQLite WAL | Write-Ahead Logging for concurrent read/write access |
+| Threshold throttling | Perfect threshold writes only when changed > 0.05 or every 200 loops |
+| Circuit breaker | API failures tracked with automatic backoff (5 errors → 60s cooldown) |
 
 ## Strategy Classification
 
-This is a **momentum-based contrarian strategy** - it uses AI to identify when significant price drops represent buying opportunities rather than continued declines, then systematically builds positions through DCA while maintaining strict profit-taking discipline through trailing stops.
+This is a **boundary-based momentum system**. It identifies when the current price deviates significantly from the model's predicted range across multiple timeframes. The more timeframes that agree (higher signal count), the stronger the conviction.
 
-The system essentially tries to "buy the dip" intelligently by using neural networks to distinguish between temporary corrections (good buying opportunities) and genuine downtrends (avoid buying). The multi-timeframe analysis provides confirmation across different time horizons to increase confidence in trading decisions.
-
-## Neural Levels Explained
-
-- These are signal strength levels from low to high (0-7)
-- Higher number = stronger signal
-- LONG = buy-direction signal, SHORT = sell-direction signal
-- The system combines these signals with hardcoded percentage triggers for precise entry timing
-
-## Practical Trading Example
-
-### Starting Portfolio
-- **$60 AUD** (cash)
-- **$20 BTC** (existing holding)
-- **Total Value: $80 AUD**
-
-### DCA Trigger Reference
-
-| Level | Hardcoded Drop | Neural Level | Whichever Hits First |
-|-------|----------------|--------------|----------------------|
-| 0 | -2.5% | Level 4 | Triggers DCA |
-| 1 | -5.0% | Level 5 | Triggers DCA |
-| 2 | -10.0% | Level 6 | Triggers DCA |
-| 3 | -15.0% | Level 7 | Triggers DCA |
-| 4 | -25.0% | - | Triggers DCA |
-| 5 | -35.0% | - | Triggers DCA |
-| 6 | -45.0% | - | Triggers DCA |
-| 7 | -50.0% | - | Triggers DCA |
-
-### Example Trade Flow
-
-| Step | Event | Signal/Trigger | Action | Portfolio After |
-|------|-------|----------------|--------|-----------------|
-| 1 | AI detects buying opportunity | LONG=3, SHORT=0 | Initial buy ~$0.50 | $59.50 AUD, $20.50 BTC |
-| 2 | Price drops -3% below cost | Hits -2.5% DCA level | DCA buy 2× position (~$40) | $19.50 AUD, ~$60 BTC |
-| 3 | Price recovers +5% above cost | PM line (2.5%) activates | Hold - trailing begins | $19.50 AUD, ~$63 BTC |
-| 4 | Price peaks at +8% | Trail line at +7.5% | Hold - tracking peak | $19.50 AUD, ~$65 BTC |
-| 5 | Price drops to +7% | Crosses below trail line | **SELL 100%** | ~$84 AUD, $0 BTC |
-
-### Step-by-Step Breakdown
-
-**Step 1 - Entry Signal:**
-- Neural network detects price dropped below 3 predicted low lines (LONG=3)
-- No bearish signals present (SHORT=0)
-- Bot executes initial buy of ~$0.50 (minimum position size)
-
-**Step 2 - DCA Triggered:**
-- Price continues dropping, hits -3% below cost basis
-- This exceeds the -2.5% hardcoded trigger for DCA Level 0
-- Bot buys 2× the current position value (~$40)
-- New averaged cost basis is lower
-
-**Step 3 - Profit Margin Activates:**
-- Price recovers and reaches +5% above new cost basis
-- Since DCA was used, profit margin line is set at 2.5%
-- Price is above PM line, so trailing mode activates
-
-**Step 4 - Trailing the Peak:**
-- Price continues rising to +8%
-- Trailing line follows at 0.5% below peak = +7.5%
-- Bot holds, waiting for reversal
-
-**Step 5 - Exit Triggered:**
-- Price drops from +8% to +7%
-- This crosses below the trailing line (+7.5%)
-- Bot executes market sell of 100% position
-- Profit realized: ~$4 AUD
-
-### Key Takeaways
-
-1. **Small initial positions** - Entry buys are tiny (~$0.50) to test the waters
-2. **Aggressive DCA** - Each DCA doubles the position size (2×)
-3. **Trailing exit** - Locks in profits by following price peaks with 0.5% buffer
-4. **Rate limited** - Max 2 DCA buys per coin per 24 hours prevents over-exposure
-5. **Dual triggers** - DCA can trigger from neural signals OR hardcoded % drops (whichever first)
+The system does not execute trades automatically in the web version — it provides signals and analysis that inform manual trading decisions, complemented by the LLM-powered analysis engine for deeper research.
