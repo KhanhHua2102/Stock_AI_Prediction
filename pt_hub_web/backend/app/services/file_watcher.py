@@ -80,7 +80,8 @@ class FileWatcher:
     # ------------------------------------------------------------------
 
     def read_neural_signals(self, ticker: str) -> Optional[dict]:
-        return runtime_db.get_signals(ticker)
+        safe = ticker.upper().replace("^", "").replace(".", "_")
+        return runtime_db.get_signals(safe)
 
     # ------------------------------------------------------------------
     # Training status  (trainer_status table)
@@ -89,15 +90,30 @@ class FileWatcher:
     def get_training_status(self, ticker: str) -> str:
         safe_ticker = ticker.replace("^", "").replace(".", "_")
         row = runtime_db.get_trainer(safe_ticker)
-        if row and row.get("state") == "FINISHED":
+
+        if not row or row.get("state") == "NOT_TRAINED":
+            # Fallback: check for memory weight files on disk (backward compat)
+            ticker_dir = settings.project_dir / "data" / "training" / safe_ticker
+            if ticker_dir.exists() and any(ticker_dir.glob("memory_weights_*.txt")):
+                return "TRAINED"
+            return "NOT_TRAINED"
+
+        if row.get("state") == "TRAINING":
+            return "TRAINING"
+
+        # state == FINISHED — verify all timeframes actually have weights
+        all_trained = True
+        for tf in settings.timeframes:
+            mem = runtime_db.get_memory(safe_ticker, tf)
+            if not mem or (not mem.get("weights_high") and not mem.get("weights_low")):
+                all_trained = False
+                break
+
+        if all_trained:
             return "TRAINED"
 
-        # Fallback: check for memory weight files on disk (backward compat)
-        ticker_dir = settings.project_dir / "data" / "training" / safe_ticker
-        if ticker_dir.exists() and any(ticker_dir.glob("memory_weights_*.txt")):
-            return "TRAINED"
-
-        return "NOT_TRAINED"
+        # Trainer exited but not all timeframes done — partial training
+        return "PARTIAL"
 
 
 # Singleton instance

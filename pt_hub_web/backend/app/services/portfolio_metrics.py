@@ -127,13 +127,35 @@ def _fetch_betashares_calendar() -> dict[str, list[dict]]:
     return result
 
 
-def fetch_upcoming_events(tickers: list[str]) -> list[dict]:
+def _estimate_distribution(yf_ticker: str, quantity: float, per_share_rate: float | None = None) -> float | None:
+    """Estimate distribution amount from last 3 dividends avg * quantity.
+    If per_share_rate is provided (e.g. from yfinance detail), use that directly."""
+    if quantity <= 0:
+        return None
+    if per_share_rate is not None:
+        return round(per_share_rate * quantity, 2)
+    try:
+        import yfinance as yf
+        divs = yf.Ticker(yf_ticker).dividends
+        if divs is not None and len(divs) > 0:
+            recent = divs.tail(3)
+            avg = float(recent.mean())
+            if avg > 0:
+                return round(avg * quantity, 2)
+    except Exception as e:
+        logger.warning("Failed to estimate distribution for %s: %s", yf_ticker, e)
+    return None
+
+
+def fetch_upcoming_events(tickers: list[str], holdings: dict[str, float] | None = None) -> list[dict]:
     """Fetch upcoming earnings, dividends, splits for tickers via yfinance.
-    Returns a flat list of events sorted by date (nearest first)."""
+    Returns a flat list of events sorted by date (nearest first).
+    If holdings is provided ({ticker: quantity}), enriches events with est_amount."""
     import yfinance as yf
     from datetime import date
 
-    cache_key = ",".join(sorted(tickers))
+    holdings = holdings or {}
+    cache_key = ",".join(sorted(tickers)) + ";" + ",".join(f"{k}={v}" for k, v in sorted(holdings.items()))
     if cache_key in _events_cache:
         ts, cached = _events_cache[cache_key]
         if time.time() - ts < _EVENTS_TTL:
@@ -227,6 +249,38 @@ def fetch_upcoming_events(tickers: list[str]) -> list[dict]:
 
         except Exception as e:
             logger.warning("Failed to fetch events for %s: %s", ticker, e)
+
+    # Enrich distribution/dividend events with estimated amounts
+    if holdings:
+        tickers_with_div_event: set[str] = set()
+        for ev in events:
+            if ev["type"] in ("distribution", "ex-dividend", "dividend"):
+                tickers_with_div_event.add(ev["ticker"])
+                ticker = ev["ticker"]
+                qty = holdings.get(ticker, 0)
+                if qty > 0:
+                    # Parse per-share rate from detail if available (e.g. "$0.26/share")
+                    per_share = None
+                    detail = ev.get("detail") or ""
+                    if "/share" in detail:
+                        try:
+                            per_share = float(detail.replace("$", "").replace("/share", ""))
+                        except ValueError:
+                            pass
+                    yf_ticker = normalize_ticker(ticker)
+                    ev["est_amount"] = _estimate_distribution(yf_ticker, qty, per_share)
+
+        # For tickers that have no upcoming dividend event but do pay dividends,
+        # attach est_amount to their other events (e.g. earnings)
+        for ev in events:
+            if ev["ticker"] not in tickers_with_div_event and ev.get("est_amount") is None:
+                ticker = ev["ticker"]
+                qty = holdings.get(ticker, 0)
+                if qty > 0:
+                    yf_ticker = normalize_ticker(ticker)
+                    est = _estimate_distribution(yf_ticker, qty)
+                    if est is not None:
+                        ev["est_amount"] = est
 
     events.sort(key=lambda e: e["date"])
     _events_cache[cache_key] = (time.time(), events)

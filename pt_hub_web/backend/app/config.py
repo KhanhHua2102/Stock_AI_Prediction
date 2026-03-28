@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     analysis_db_path: Path = Path("")
     runtime_db_path: Path = Path("")
     portfolio_db_path: Path = Path("")
+    property_db_path: Path = Path("")
     sec_user_agent: str = "StockAIPrediction/1.0 (tonyhua212002@duck.com)"
 
     # Phase 2 API keys (set via PT_FINNHUB_API_KEY, PT_FRED_API_KEY, PT_TWELVEDATA_API_KEY)
@@ -58,6 +59,7 @@ class Settings(BaseSettings):
     # Phase 3 API keys (set via PT_FMP_API_KEY, PT_POLYGON_API_KEY)
     fmp_api_key: Optional[str] = None
     polygon_api_key: Optional[str] = None
+
 
 
     model_config = SettingsConfigDict(
@@ -84,6 +86,9 @@ class Settings(BaseSettings):
 
         if not self.portfolio_db_path or str(self.portfolio_db_path) == ".":
             self.portfolio_db_path = self.project_dir / "data" / "portfolio.db"
+
+        if not self.property_db_path or str(self.property_db_path) == ".":
+            self.property_db_path = self.project_dir / "data" / "property.db"
 
     def _setup_api_key(self):
         """Setup API key for authentication."""
@@ -164,3 +169,6 @@ runtime_db = RuntimeDB(settings.runtime_db_path)
 
 from app.services.portfolio_db import PortfolioDB
 portfolio_db = PortfolioDB(settings.portfolio_db_path)
+
+from app.services.property_db import PropertyDB
+property_db = PropertyDB(settings.property_db_path)

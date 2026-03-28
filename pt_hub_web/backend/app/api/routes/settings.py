@@ -22,6 +22,7 @@ async def get_settings():
         "candles_limit": settings.candles_limit,
         "ui_refresh_seconds": settings.ui_refresh_seconds,
         "chart_refresh_seconds": settings.chart_refresh_seconds,
+        "ws_token": settings.api_key,
     }
 
 

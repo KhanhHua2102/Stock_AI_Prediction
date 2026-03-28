@@ -1,9 +1,10 @@
 import asyncio
 import json
 from typing import Dict, Set, Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketException, Query, status
 from dataclasses import dataclass, field
 
+from app.config import settings
 from app.services.process_manager import process_manager
 from app.services.file_watcher import file_watcher
 from app.services.analysis_engine import analysis_engine
@@ -148,7 +149,13 @@ analysis_engine.register_complete_callback(on_analysis_complete)
 
 
 @router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    api_key: Optional[str] = Query(None, alias="api_key"),
+):
+    if api_key != settings.api_key:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
     await manager.connect(websocket)
 
     # Start broadcast task if not running
@@ -172,6 +179,28 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "subscribed",
                     "channels": channels
                 })
+
+                # Send initial state for subscribed channels
+                if "process_status" in channels:
+                    await manager.send_personal(websocket, {
+                        "type": "process_status",
+                        "data": process_manager.get_status()
+                    })
+                if "neural_signals" in channels:
+                    from app.config import settings as app_settings
+                    signals = {}
+                    for ticker in app_settings.tickers:
+                        raw = file_watcher.read_neural_signals(ticker)
+                        if raw:
+                            signals[ticker] = {
+                                "long_signal": raw.get("long_dca_signal", 0),
+                                "short_signal": raw.get("short_dca_signal", 0),
+                            }
+                    if signals:
+                        await manager.send_personal(websocket, {
+                            "type": "neural_signals",
+                            "data": signals
+                        })
 
             elif msg_type == "refresh":
                 target = data.get("target")

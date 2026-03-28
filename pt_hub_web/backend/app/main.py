@@ -9,7 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import settings
 from app.services.process_manager import process_manager
-from app.api.routes import trading, training, charts, predictions, settings as settings_routes, analysis, portfolio
+from app.api.routes import trading, training, charts, predictions, settings as settings_routes, analysis, portfolio, property, market, backtest
 from app.api.websocket import router as ws_router
 
 
@@ -42,7 +42,43 @@ async def lifespan(app: FastAPI):
     print(f"Port: {settings.api_port}")
     print(f"API Key required: Yes (X-API-Key header)")
     print(f"{'='*60}\n")
+
+    # Clean up stale TRAINING states from previous sessions (process died)
+    from app.config import runtime_db
+    for t in settings.tickers:
+        safe = t.replace("^", "").replace(".", "_")
+        row = runtime_db.get_trainer(safe)
+        if row and row.get("state") == "TRAINING":
+            # Check if any timeframes have weights — if so, mark as FINISHED (partial)
+            has_weights = any(
+                runtime_db.get_memory(safe, tf) and runtime_db.get_memory(safe, tf).get("weights_high")
+                for tf in settings.timeframes
+            )
+            new_state = "FINISHED" if has_weights else "NOT_TRAINED"
+            runtime_db.upsert_trainer(safe, state=new_state)
+            print(f"[boot] Reset stale TRAINING state for {t} → {new_state}")
+
+    # Auto-start neural runner if any tickers are already trained
+    from app.services.file_watcher import file_watcher
+    trained = [t for t in settings.tickers if file_watcher.get_training_status(t) in ("TRAINED", "PARTIAL")]
+    if trained:
+        print(f"[boot] {len(trained)}/{len(settings.tickers)} tickers already trained — starting neural runner")
+        file_watcher.write_selected_tickers(settings.tickers)
+        process_manager.start_neural()
+
+    # Start Crawl4AI headless browser for property data scraping
+    stop_crawler = None
+    try:
+        from app.services.property_data import start_crawler, stop_crawler as _stop
+        stop_crawler = _stop
+        await start_crawler()
+    except Exception as e:
+        print(f"[boot] Property crawler setup skipped: {e}")
+
     yield
+
+    if stop_crawler:
+        await stop_crawler()
     process_manager.stop_all()
 
 
@@ -104,6 +140,24 @@ app.include_router(
     portfolio.router,
     prefix="/api/portfolio",
     tags=["Portfolio"],
+    dependencies=[Depends(verify_api_key)],
+)
+app.include_router(
+    property.router,
+    prefix="/api/property",
+    tags=["Property"],
+    dependencies=[Depends(verify_api_key)],
+)
+app.include_router(
+    market.router,
+    prefix="/api/market",
+    tags=["Market"],
+    dependencies=[Depends(verify_api_key)],
+)
+app.include_router(
+    backtest.router,
+    prefix="/api/backtest",
+    tags=["Backtest"],
     dependencies=[Depends(verify_api_key)],
 )
 app.include_router(ws_router)

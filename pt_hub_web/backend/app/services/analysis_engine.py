@@ -29,6 +29,58 @@ async def _fetch_reddit_sentiment(ticker: str) -> Optional[dict]:
     return None
 
 
+async def _fetch_stocktwits_sentiment(ticker: str) -> Optional[dict]:
+    """Fetch sentiment from StockTwits community."""
+    try:
+        url = f"https://api.stocktwits.com/api/2/streams/symbol/{ticker}.json"
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.get(url, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                symbol = data.get("symbol", {})
+                # Overall sentiment from StockTwits
+                sentiment_info = symbol.get("sentiment") or {}
+                basic = sentiment_info.get("basic") or {}
+                # Count bullish/bearish from recent messages
+                messages = data.get("messages", [])
+                bullish = sum(1 for m in messages if (m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish"))
+                bearish = sum(1 for m in messages if (m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish"))
+                return {
+                    "sentiment": basic.get("sentiment", "Unknown"),
+                    "bullish_count": bullish,
+                    "bearish_count": bearish,
+                    "total_messages": len(messages),
+                }
+    except Exception as e:
+        logger.warning(f"Failed to fetch StockTwits sentiment for {ticker}: {e}")
+    return None
+
+
+async def _fetch_fear_greed_index() -> Optional[dict]:
+    """Fetch CNN Fear & Greed Index for overall market sentiment."""
+    try:
+        url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://edition.cnn.com/",
+        }
+        async with httpx.AsyncClient(verify=False) as client:
+            response = await client.get(url, timeout=10.0, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                fg = data.get("fear_and_greed", {})
+                prev = data.get("fear_and_greed_historical", {}).get("previousClose", {})
+                return {
+                    "score": round(fg.get("score", 0), 1),
+                    "rating": fg.get("rating", "Unknown"),
+                    "previous_close": round(prev.get("score", 0), 1) if prev else None,
+                }
+    except Exception as e:
+        logger.warning(f"Failed to fetch Fear & Greed Index: {e}")
+    return None
+
+
 _cik_cache: dict = {}
 
 
@@ -608,19 +660,35 @@ def build_prompt(
     news: List[dict] = [],
     price_target: Optional[dict] = None,
     valuation: Optional[dict] = None,
+    stocktwits: Optional[dict] = None,
+    fear_greed: Optional[dict] = None,
+    strategy_instructions: str = "",
+    market_context: str = "",
 ) -> str:
     ma = indicators["ma_alignment"]
     rsi = indicators["rsi"]
     macd = indicators["macd"]
     vol = indicators["volume"]
 
-    sentiment_section = ""
+    sentiment_parts = []
     if sentiment:
-        sentiment_section = f"""## Social Sentiment (Reddit r/WallStreetBets)
+        sentiment_parts.append(f"""### Reddit (r/WallStreetBets)
 - Status: {sentiment['sentiment']}
 - Sentiment Score: {sentiment['sentiment_score']}
-- Number of Comments: {sentiment['no_of_comments']}
-"""
+- Number of Comments: {sentiment['no_of_comments']}""")
+    if stocktwits:
+        sentiment_parts.append(f"""### StockTwits Community
+- Overall Sentiment: {stocktwits['sentiment']}
+- Bullish Posts: {stocktwits['bullish_count']} | Bearish Posts: {stocktwits['bearish_count']}
+- Total Messages Sampled: {stocktwits['total_messages']}""")
+    if fear_greed:
+        prev_str = f" (prev close: {fear_greed['previous_close']})" if fear_greed.get('previous_close') else ""
+        sentiment_parts.append(f"""### Market Fear & Greed Index (CNN)
+- Score: {fear_greed['score']}/100 ({fear_greed['rating']}){prev_str}""")
+
+    sentiment_section = ""
+    if sentiment_parts:
+        sentiment_section = "## Social Intelligence\n" + "\n".join(sentiment_parts) + "\n"
 
     filings_section = ""
     if filings:
@@ -701,9 +769,21 @@ def build_prompt(
             lines.append(f"- ROE: {valuation['roe']*100:.1f}%")
         valuation_section = "\n".join(lines) + "\n"
 
+    strategy_section = ""
+    if strategy_instructions:
+        strategy_section = f"""## Strategy Focus
+{strategy_instructions}
+Apply this strategic lens when evaluating the data above.
+
+"""
+
+    market_overview_section = ""
+    if market_context:
+        market_overview_section = f"## Market Overview\n{market_context}\n"
+
     return f"""You are a senior technical analyst. Analyze the following market data for {ticker} and provide a structured trading decision.
 
-## Market Data
+{market_overview_section}## Market Data
 - Current Price: {current_price}
 - 52-Week Range: {indicators['price_range_52w']['low']} - {indicators['price_range_52w']['high']}
 
@@ -725,7 +805,7 @@ def build_prompt(
 - Key Support Levels: {indicators['support']}
 - Key Resistance Levels: {indicators['resistance']}
 
-## Instructions
+{strategy_section}## Instructions
 Provide your analysis in EXACTLY this JSON format (no markdown, no code fences, just raw JSON):
 {{
   "decision": "BUY" or "HOLD" or "SELL",
@@ -793,19 +873,19 @@ class AnalysisEngine:
             except Exception:
                 pass
 
-    async def run_analysis(self, ticker: str) -> dict:
+    async def run_analysis(self, ticker: str, strategy: str = "default") -> dict:
         if self._running:
             raise RuntimeError("Analysis already in progress")
 
         self._running = True
         self._current_ticker = ticker
         try:
-            return await self._execute(ticker)
+            return await self._execute(ticker, strategy)
         finally:
             self._running = False
             self._current_ticker = None
 
-    async def _execute(self, ticker: str) -> dict:
+    async def _execute(self, ticker: str, strategy: str = "default") -> dict:
         self._log(f"Starting analysis for {ticker}...")
 
         # 1. Fetch candles
@@ -860,6 +940,8 @@ class AnalysisEngine:
             _fetch_ticker_news(ticker),
             _fetch_price_target(ticker) if ticker != "VNINDEX" else asyncio.sleep(0),
             _fetch_fmp_valuation(ticker),
+            _fetch_stocktwits_sentiment(ticker) if ticker != "VNINDEX" else asyncio.sleep(0),
+            _fetch_fear_greed_index(),
         )
         macro = enrichment[0]
         treasury = enrichment[1]
@@ -867,6 +949,8 @@ class AnalysisEngine:
         news = enrichment[3] if isinstance(enrichment[3], list) else []
         price_target = enrichment[4] if isinstance(enrichment[4], dict) else None
         valuation = enrichment[5] if isinstance(enrichment[5], dict) else None
+        stocktwits = enrichment[6] if isinstance(enrichment[6], dict) else None
+        fear_greed = enrichment[7] if isinstance(enrichment[7], dict) else None
 
         if macro:
             self._log(f"Macro data: {macro.get('region', 'N/A')} region via {macro.get('source', 'Econdb')}")
@@ -883,12 +967,31 @@ class AnalysisEngine:
             dcf_str = f"DCF=${valuation.get('dcf', 'N/A')}" if valuation.get('dcf') else ""
             pe_str = f"P/E={valuation.get('pe_ratio', 'N/A'):.1f}" if valuation.get('pe_ratio') else ""
             self._log(f"FMP valuation: {dcf_str} {pe_str}".strip())
+        if stocktwits:
+            self._log(f"StockTwits: {stocktwits['sentiment']} (bull:{stocktwits['bullish_count']} bear:{stocktwits['bearish_count']})")
+        if fear_greed:
+            self._log(f"Fear & Greed Index: {fear_greed['score']}/100 ({fear_greed['rating']})")
+
+        # 2.8 Fetch market context (if available)
+        market_ctx = ""
+        try:
+            from app.services.market_review import get_market_context_for_prompt
+            market_ctx = await get_market_context_for_prompt()
+            if market_ctx:
+                self._log("Injecting market context into analysis")
+        except Exception:
+            pass
 
         # 3. Call LLM
+        from app.services.strategies import get_strategy
+        strat = get_strategy(strategy)
+        if strategy != "default":
+            self._log(f"Using strategy: {strat['name']}")
         self._log("Sending to LLM for analysis...")
         prompt = build_prompt(
             ticker, current_price, indicators, sentiment, filings,
             macro, treasury, analyst, news, price_target, valuation,
+            stocktwits, fear_greed, strat["prompt_instructions"], market_ctx,
         )
         raw_response = await self._call_llm(prompt)
 
@@ -910,6 +1013,7 @@ class AnalysisEngine:
             "raw_reasoning": raw_response,
             "model_used": settings.llm_model,
             "news": news,
+            "strategy": strategy,
         }
 
         # 6. Store in DB
@@ -923,11 +1027,13 @@ class AnalysisEngine:
         return stored
 
     async def _call_llm(self, prompt: str) -> str:
+        import httpx as _httpx
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(
             base_url=settings.llm_api_base,
             api_key=settings.llm_api_key,
+            timeout=_httpx.Timeout(120.0, connect=30.0),
         )
 
         models = [settings.llm_model] + settings.llm_fallback_models

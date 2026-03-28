@@ -118,26 +118,37 @@ class ProcessManager:
             self._on_trainer_finished(ticker)
 
     def _on_trainer_finished(self, ticker: str):
-        """Called when a trainer process exits. Auto-starts pt_thinker if all tickers are trained."""
+        """Called when a trainer process exits. Auto-starts/restarts pt_thinker
+        so that newly trained tickers get neural signals immediately.
+        pt_thinker already skips untrained tickers internally."""
         # Lazy import to avoid circular dependency
         from app.services.file_watcher import file_watcher
 
         self._broadcast_status()
         self._broadcast_log("trainer", f"Training finished for {ticker}", ticker)
 
-        # Check if ALL configured tickers are now trained
-        all_trained = all(
-            file_watcher.get_training_status(t) == "TRAINED"
-            for t in settings.tickers
-        )
+        # No remaining trainers running — (re)start neural runner so it
+        # picks up the freshly-trained ticker.  pt_thinker skips any
+        # ticker that isn't trained, so partial training is fine.
+        any_training = any(info.running for info in self.trainers.values())
+        if any_training:
+            return
 
-        if all_trained and not self.neural.running:
-            # No remaining trainers running either
-            any_training = any(info.running for info in self.trainers.values())
-            if not any_training:
-                self._broadcast_log("runner", "All tickers trained — auto-starting neural runner")
-                file_watcher.write_selected_tickers(settings.tickers)
-                self.start_neural()
+        trained = [
+            t for t in settings.tickers
+            if file_watcher.get_training_status(t) in ("TRAINED", "PARTIAL")
+        ]
+        if not trained:
+            return
+
+        # Restart neural runner so it picks up updated training weights
+        if self.neural.running:
+            self._broadcast_log("runner", "Restarting neural runner with updated training")
+            self.stop_neural()
+
+        file_watcher.write_selected_tickers(settings.tickers)
+        self._broadcast_log("runner", f"Starting neural runner ({len(trained)}/{len(settings.tickers)} tickers trained)")
+        self.start_neural()
 
     def _reset_runner_ready(self):
         """Reset runner_ready state in database."""

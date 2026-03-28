@@ -1091,5 +1091,6 @@ async def get_upcoming_events(portfolio_id: int):
     if not active_tickers:
         return {"data": []}
 
-    events = fetch_upcoming_events(active_tickers)
+    holdings_map = {h["ticker"]: h["quantity"] for h in holdings if h["quantity"] > 0.0001}
+    events = fetch_upcoming_events(active_tickers, holdings=holdings_map)
     return {"data": events}

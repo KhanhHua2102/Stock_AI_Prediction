@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from app.config import settings
 from app.services.analysis_engine import analysis_engine
 from app.services.analysis_db import AnalysisDB
+from app.services.strategies import get_strategy_list
 
 router = APIRouter()
 
@@ -17,8 +18,14 @@ def _get_db() -> AnalysisDB:
     return _db
 
 
+@router.get("/strategies")
+async def list_strategies():
+    """Return available analysis strategies."""
+    return {"strategies": get_strategy_list()}
+
+
 @router.post("/run/{ticker}")
-async def run_analysis(ticker: str):
+async def run_analysis(ticker: str, strategy: str = Query(default="default")):
     """Trigger an on-demand analysis for a ticker."""
     if ticker not in settings.tickers:
         raise HTTPException(status_code=400, detail=f"Invalid ticker: {ticker}")
@@ -38,7 +45,7 @@ async def run_analysis(ticker: str):
     # Run analysis as a background task
     async def _run():
         try:
-            await analysis_engine.run_analysis(ticker)
+            await analysis_engine.run_analysis(ticker, strategy=strategy)
         except Exception as e:
             # Log the error through the engine's callback system
             for cb in analysis_engine._log_callbacks:
