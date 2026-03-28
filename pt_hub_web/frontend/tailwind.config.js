@@ -1,8 +1,11 @@
+import { heroui } from '@heroui/theme';
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
+    "./node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {
@@ -66,5 +69,34 @@ export default {
       },
     },
   },
-  plugins: [],
+  darkMode: 'class',
+  plugins: [heroui({
+    defaultTheme: 'dark',
+    themes: {
+      dark: {
+        colors: {
+          background: '#000000',
+          foreground: '#ECEDEE',
+          default: {
+            50: '#18181b',
+            100: '#27272a',
+            200: '#3f3f46',
+            300: '#52525b',
+            400: '#71717a',
+            500: '#a1a1aa',
+            foreground: '#ECEDEE',
+            DEFAULT: '#3f3f46',
+          },
+          content1: '#18181b',
+          content2: '#27272a',
+          content3: '#3f3f46',
+          content4: '#52525b',
+          primary: {
+            DEFAULT: '#006FEE',
+            foreground: '#ffffff',
+          },
+        },
+      },
+    },
+  })],
 }
