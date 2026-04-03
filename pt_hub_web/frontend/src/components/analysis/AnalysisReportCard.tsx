@@ -188,6 +188,26 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
                 {report.score}/100
               </span>
             </div>
+            {report.trend_analysis && (
+              <div className="flex items-center gap-3 mt-1">
+                <span className="text-sm" style={{ color: '#a1a1aa' }}>Signal Score</span>
+                <div
+                  className="flex-1 h-3 rounded-full overflow-hidden max-w-[200px]"
+                  style={{ background: '#27272a' }}
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${report.trend_analysis.signal_score}%`,
+                      background: confidenceBarColor(report.trend_analysis.signal_score),
+                    }}
+                  />
+                </div>
+                <span className="font-medium text-sm" style={{ color: '#ECEDEE' }}>
+                  {report.trend_analysis.signal_score}/100
+                </span>
+              </div>
+            )}
           </div>
         </div>
         <p className="text-sm leading-relaxed" style={{ color: '#ECEDEE' }}>
@@ -210,12 +230,12 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
           </h3>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between">
-              <span style={{ color: '#a1a1aa' }}>MA Alignment</span>
+              <span style={{ color: '#a1a1aa' }}>MA Trend</span>
               <span className="font-medium" style={{
                 color: report.indicators.ma_alignment.status === 'bullish' ? '#17c964' :
                   report.indicators.ma_alignment.status === 'bearish' ? '#f31260' : '#f5a524'
               }}>
-                {report.indicators.ma_alignment.status}
+                {report.indicators.ma_alignment.trend_level ?? report.indicators.ma_alignment.status}
               </span>
             </div>
             <div className="flex justify-between text-xs" style={{ color: '#a1a1aa' }}>
@@ -224,7 +244,7 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
               <span>SMA200: <span className="font-mono">{fmt(report.indicators.ma_alignment.sma200)}</span></span>
             </div>
             <div className="flex justify-between">
-              <span style={{ color: '#a1a1aa' }}>RSI (14)</span>
+              <span style={{ color: '#a1a1aa' }}>RSI</span>
               <span className="font-medium" style={{
                 color: report.indicators.rsi.zone === 'overbought' ? '#f31260' :
                   report.indicators.rsi.zone === 'oversold' ? '#17c964' : '#ECEDEE'
@@ -232,6 +252,21 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
                 <span className="font-mono">{fmt(report.indicators.rsi.value, 1)}</span> ({report.indicators.rsi.zone})
               </span>
             </div>
+            {(report.indicators.rsi.rsi_6 != null || report.indicators.rsi.rsi_24 != null) && (
+              <div className="flex justify-between text-xs" style={{ color: '#a1a1aa' }}>
+                <span>RSI(6): <span className="font-mono">{fmt(report.indicators.rsi.rsi_6, 1)}</span></span>
+                <span>RSI(14): <span className="font-mono">{fmt(report.indicators.rsi.value, 1)}</span></span>
+                <span>RSI(24): <span className="font-mono">{fmt(report.indicators.rsi.rsi_24, 1)}</span></span>
+              </div>
+            )}
+            {report.indicators.bias_rate && (
+              <div className="flex justify-between">
+                <span style={{ color: '#a1a1aa' }}>Bias Rate</span>
+                <span className="font-mono text-xs" style={{ color: '#ECEDEE' }}>
+                  5d: {report.indicators.bias_rate.bias_5 ?? '\u2014'}% | 10d: {report.indicators.bias_rate.bias_10 ?? '\u2014'}% | 20d: {report.indicators.bias_rate.bias_20 ?? '\u2014'}%
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span style={{ color: '#a1a1aa' }}>MACD</span>
               <span className="font-medium" style={{
@@ -244,6 +279,14 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
               <span style={{ color: '#a1a1aa' }}>Volume</span>
               <span className="font-medium" style={{ color: '#ECEDEE' }}>
                 <span className="font-mono">{report.indicators.volume.ratio}x</span> avg
+                {report.indicators.volume.category && (
+                  <span className="ml-1 text-xs" style={{
+                    color: report.indicators.volume.category === 'heavy' ? '#17c964' :
+                      report.indicators.volume.category === 'shrink' ? '#f5a524' : '#a1a1aa'
+                  }}>
+                    ({report.indicators.volume.category})
+                  </span>
+                )}
               </span>
             </div>
           </div>
@@ -329,6 +372,76 @@ export function AnalysisReportCard({ report }: { report: AnalysisReport }) {
                 <span style={{ color: '#ECEDEE' }}>{item.item}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Battle Plan */}
+      {report.battle_plan && (
+        <div
+          className="rounded-xl p-4"
+          style={{ background: '#18181b', border: '1px solid #27272a' }}
+        >
+          <h3 className="text-sm font-medium mb-3" style={{ color: '#a1a1aa' }}>
+            Battle Plan
+            {report.time_horizon && (
+              <span
+                className="ml-2 px-2 py-0.5 rounded text-xs"
+                style={{ background: '#27272a', color: '#a1a1aa', border: '1px solid #3f3f46' }}
+              >
+                {report.time_horizon.replace(/_/g, ' ')}
+              </span>
+            )}
+          </h3>
+          <div className="space-y-3 text-sm">
+            {report.battle_plan.entry_strategy && (
+              <div>
+                <p className="text-xs font-medium mb-1" style={{ color: '#17c964' }}>Entry Strategy</p>
+                <p style={{ color: '#ECEDEE' }}>{report.battle_plan.entry_strategy}</p>
+              </div>
+            )}
+            {report.battle_plan.exit_strategy && (
+              <div>
+                <p className="text-xs font-medium mb-1" style={{ color: '#006FEE' }}>Exit Strategy</p>
+                <p style={{ color: '#ECEDEE' }}>{report.battle_plan.exit_strategy}</p>
+              </div>
+            )}
+            {report.battle_plan.risk_management && (
+              <div>
+                <p className="text-xs font-medium mb-1" style={{ color: '#f5a524' }}>Risk Management</p>
+                <p style={{ color: '#ECEDEE' }}>{report.battle_plan.risk_management}</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Trend Analysis */}
+      {report.trend_analysis && (report.trend_analysis.reasons.length > 0 || report.trend_analysis.risks.length > 0) && (
+        <div
+          className="rounded-xl p-4"
+          style={{ background: '#18181b', border: '1px solid #27272a' }}
+        >
+          <h3 className="text-sm font-medium mb-3" style={{ color: '#a1a1aa' }}>
+            Trend Analysis ({report.trend_analysis.trend_status})
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {report.trend_analysis.reasons.length > 0 && (
+              <div>
+                <p className="text-xs font-medium mb-1" style={{ color: '#17c964' }}>Bullish Factors</p>
+                {report.trend_analysis.reasons.map((r, i) => (
+                  <p key={i} className="text-xs leading-relaxed" style={{ color: '#ECEDEE' }}>{r}</p>
+                ))}
+              </div>
+            )}
+            {report.trend_analysis.risks.length > 0 && (
+              <div>
+                <p className="text-xs font-medium mb-1" style={{ color: '#f31260' }}>Risk Factors</p>
+                {report.trend_analysis.risks.map((r, i) => (
+                  <p key={i} className="text-xs leading-relaxed" style={{ color: '#ECEDEE' }}>{r}</p>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

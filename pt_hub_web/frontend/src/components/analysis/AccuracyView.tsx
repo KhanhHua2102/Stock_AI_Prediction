@@ -23,6 +23,7 @@ export function AccuracyView() {
   const [results, setResults] = useState<BacktestResult[]>([]);
   const [total, setTotal] = useState(0);
   const [filterTicker, setFilterTicker] = useState('');
+  const [forwardDays, setForwardDays] = useState(10);
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -50,7 +51,7 @@ export function AccuracyView() {
   const handleRunBacktest = async () => {
     setRunning(true);
     try {
-      const res = await backtestApi.run(filterTicker || undefined);
+      const res = await backtestApi.run(filterTicker || undefined, forwardDays);
       setSummary(res.summary);
       // Reload results
       const resultsRes = await backtestApi.getResults(filterTicker || undefined, 50, 0);
@@ -68,6 +69,21 @@ export function AccuracyView() {
       <div className="space-y-4 max-w-4xl mx-auto">
         {/* Controls */}
         <div className="flex items-center gap-3">
+          <div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid #3f3f46' }}>
+            {[1, 10].map((d) => (
+              <button
+                key={d}
+                onClick={() => setForwardDays(d)}
+                className="px-3 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  background: forwardDays === d ? '#006FEE' : '#27272a',
+                  color: forwardDays === d ? '#fff' : '#a1a1aa',
+                }}
+              >
+                {d === 1 ? '1-Day' : '10-Day'}
+              </button>
+            ))}
+          </div>
           <Button
             color="primary"
             size="sm"
@@ -241,7 +257,7 @@ export function AccuracyView() {
         {/* Empty state */}
         {!loading && results.length === 0 && (
           <div className="flex items-center justify-center h-48" style={{ color: '#a1a1aa' }}>
-            No backtest results yet. Run analysis on tickers first, then click "Run Backtest" after 10+ days.
+            No backtest results yet. Run analysis first, then click "Run Backtest" after {forwardDays}+ trading day{forwardDays > 1 ? 's' : ''}.
           </div>
         )}
 
