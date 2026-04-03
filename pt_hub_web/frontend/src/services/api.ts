@@ -144,6 +144,38 @@ export const settingsApi = {
       method: 'POST',
       body: JSON.stringify({ tickers }),
     }),
+
+  exportBackup: async () => {
+    const response = await fetch(`${API_BASE}/settings/backup`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || 'Backup export failed');
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?(.+?)"?$/);
+    const filename = match?.[1] || 'sai_backup.zip';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  importBackup: async (file: File): Promise<{ status: string; restored: string[]; message: string }> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const response = await fetch(`${API_BASE}/settings/restore`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(error.detail || 'Backup import failed');
+    }
+    return response.json();
+  },
 };
 
 // Analysis endpoints

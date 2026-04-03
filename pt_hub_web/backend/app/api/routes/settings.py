@@ -1,7 +1,12 @@
 import json
 import asyncio
+import shutil
+import zipfile
+import io
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List
 
@@ -10,6 +15,8 @@ from app.services.process_manager import process_manager
 
 router = APIRouter()
 _search_executor = ThreadPoolExecutor(max_workers=2)
+
+_BACKUP_DBS = ["portfolio.db", "analysis.db", "expenses.db", "property.db"]
 
 
 @router.get("")
@@ -160,4 +167,90 @@ async def update_tickers(request: TickersRequest):
         "candles_limit": settings.candles_limit,
         "ui_refresh_seconds": settings.ui_refresh_seconds,
         "chart_refresh_seconds": settings.chart_refresh_seconds,
+    }
+
+
+@router.get("/backup")
+async def export_backup():
+    """Export all app data as a ZIP file."""
+    data_dir = settings.project_dir / "data"
+    buf = io.BytesIO()
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Add database files
+        for db_name in _BACKUP_DBS:
+            db_path = data_dir / db_name
+            if db_path.exists():
+                zf.write(db_path, db_name)
+
+        # Add receipts directory
+        receipts_dir = data_dir / "receipts"
+        if receipts_dir.exists():
+            for file_path in receipts_dir.rglob("*"):
+                if file_path.is_file():
+                    arcname = f"receipts/{file_path.relative_to(receipts_dir)}"
+                    zf.write(file_path, arcname)
+
+    buf.seek(0)
+    filename = f"sai_backup_{datetime.now().strftime('%Y%m%d')}.zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/restore")
+async def import_backup(file: UploadFile = File(...)):
+    """Restore app data from a backup ZIP file."""
+    if not file.filename or not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="File must be a .zip archive")
+
+    content = await file.read()
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="Invalid ZIP file")
+
+    # Validate: must contain at least one known DB
+    names = zf.namelist()
+    found_dbs = [db for db in _BACKUP_DBS if db in names]
+    if not found_dbs:
+        raise HTTPException(
+            status_code=400,
+            detail=f"ZIP must contain at least one of: {', '.join(_BACKUP_DBS)}",
+        )
+
+    data_dir = settings.project_dir / "data"
+    restored = []
+
+    # Restore database files
+    for db_name in _BACKUP_DBS:
+        if db_name not in names:
+            continue
+        db_path = data_dir / db_name
+        # Create .bak backup of current file
+        if db_path.exists():
+            shutil.copy2(db_path, db_path.with_suffix(".db.bak"))
+        # Extract new file
+        db_path.write_bytes(zf.read(db_name))
+        restored.append(db_name)
+
+    # Restore receipts
+    receipt_files = [n for n in names if n.startswith("receipts/") and not n.endswith("/")]
+    if receipt_files:
+        receipts_dir = data_dir / "receipts"
+        receipts_dir.mkdir(parents=True, exist_ok=True)
+        for name in receipt_files:
+            target = data_dir / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(name))
+        restored.append(f"receipts ({len(receipt_files)} files)")
+
+    zf.close()
+
+    return {
+        "status": "ok",
+        "restored": restored,
+        "message": "Backup restored. Please restart the application for changes to take effect.",
     }
