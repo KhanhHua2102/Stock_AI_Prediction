@@ -6,8 +6,17 @@ venv/
 *.egg-info/
 /data/
 .env
+.env.local
+.env.*.local
 .api_key
+*.key
+*.pem
+*.p12
+*.pfx
+secrets/
 /node_modules
+dist/
+.vite/
 .gitnexus
 /.claude
 .mcp.json
