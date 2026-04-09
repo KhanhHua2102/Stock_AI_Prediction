@@ -197,3 +197,6 @@ expense_db = ExpenseDB(settings.expense_db_path)
 
 from app.services.receipt_processor import ReceiptProcessor
 receipt_processor = ReceiptProcessor(settings.receipts_dir, expense_db)
+
+from app.services.agent_registry import AgentRegistry
+agent_registry = AgentRegistry(settings.agents_dir)
