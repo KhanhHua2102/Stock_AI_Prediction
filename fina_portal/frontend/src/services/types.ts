@@ -562,6 +562,82 @@ export interface TaxAnalysisResult {
   }[];
 }
 
+// --- Multi-Agent Analysis Types ---
+
+export interface AgentInfo {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  icon: string;
+  requires_data: string[];
+  is_fina_analyst: boolean;
+}
+
+export interface AgentSignalResult {
+  agent_id: string;
+  agent_name: string;
+  category: string;
+  ticker: string;
+  signal: 'bullish' | 'bearish' | 'neutral';
+  confidence: number;
+  max_position_pct: number;
+  reasoning: string;
+  key_factors: string[];
+}
+
+export interface ConsensusResult {
+  ticker: string;
+  action: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number;
+  bullish_count: number;
+  bearish_count: number;
+  neutral_count: number;
+  weighted_bullish_pct: number;
+  weighted_bearish_pct: number;
+  reasoning: string;
+}
+
+export interface TradeRecommendation {
+  ticker: string;
+  action: 'BUY' | 'SELL' | 'HOLD';
+  confidence: number;
+  suggested_allocation_pct: number;
+  suggested_amount: number;
+  reasoning: string;
+  agent_breakdown: Partial<AgentSignalResult>[];
+  risk_notes: string;
+  debate_summary?: string;
+}
+
+export interface MultiAgentReport {
+  id: number;
+  ticker: string;
+  created_at: string;
+  selected_agents: string[];
+  portfolio_context: Record<string, unknown> | null;
+  agent_signals: AgentSignalResult[];
+  debate_occurred: boolean;
+  debate_rounds: Record<string, unknown>[] | null;
+  risk_assessment: Record<string, unknown> | null;
+  risk_reasoning: string | null;
+  consensus_action: 'BUY' | 'SELL' | 'HOLD';
+  consensus_confidence: number;
+  consensus_reasoning: string | null;
+  recommendation: TradeRecommendation | null;
+  market_data_summary: Record<string, unknown> | null;
+  model_used: string | null;
+  total_duration_ms: number | null;
+  price_at_analysis: number | null;
+}
+
+export interface MultiAgentRunRequest {
+  tickers: string[];
+  agents: string[];
+  enable_risk_reasoning?: boolean;
+  include_portfolio_context?: boolean;
+}
+
 // WebSocket event types
 export type WSEventType =
   | 'connected'
@@ -574,6 +650,9 @@ export type WSEventType =
   | 'analysis_log'
   | 'analysis_complete'
   | 'analysis_cancelled'
+  | 'multi_agent_log'
+  | 'multi_agent_complete'
+  | 'multi_agent_cancelled'
   | 'pong';
 
 export interface WSMessage {

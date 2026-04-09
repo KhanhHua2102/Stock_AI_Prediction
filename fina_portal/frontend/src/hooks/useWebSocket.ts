@@ -3,6 +3,7 @@ import { useTradeStore } from '../store/tradeStore';
 import { useTrainingStore } from '../store/trainingStore';
 import { useAnalysisStore } from '../store/analysisStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { useMultiAgentStore } from '../store/multiAgentStore';
 import type { WSMessage, ProcessStatus, NeuralSignal, AnalysisReport } from '../services/types';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
@@ -28,6 +29,8 @@ export function useWebSocket() {
     setRunning: setAnalysisRunning,
     setLatestReport,
   } = useAnalysisStore();
+
+  const { addLog: addMultiAgentLog, setRunning: setMultiAgentRunning, setComplete: setMultiAgentComplete } = useMultiAgentStore();
 
   const wsToken = useSettingsStore((s) => s.settings?.ws_token);
 
@@ -110,6 +113,20 @@ export function useWebSocket() {
             break;
           }
 
+          case 'multi_agent_log':
+            addMultiAgentLog(message.message || '');
+            break;
+          case 'multi_agent_complete':
+            setMultiAgentRunning(false);
+            if (Array.isArray(message.data)) {
+              setMultiAgentComplete(message.data);
+            }
+            break;
+          case 'multi_agent_cancelled':
+            setMultiAgentRunning(false);
+            addMultiAgentLog('[Multi-Agent] Analysis cancelled');
+            break;
+
           case 'runner_ready':
           case 'connected':
           case 'subscribed':
@@ -137,7 +154,7 @@ export function useWebSocket() {
     };
 
     wsRef.current = ws;
-  }, [setProcessStatus, addLog, setNeuralSignals, addTrainerLog, addAnalysisLog, setAnalysisRunning, setLatestReport, wsToken]);
+  }, [setProcessStatus, addLog, setNeuralSignals, addTrainerLog, addAnalysisLog, setAnalysisRunning, setLatestReport, addMultiAgentLog, setMultiAgentRunning, setMultiAgentComplete, wsToken]);
 
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;

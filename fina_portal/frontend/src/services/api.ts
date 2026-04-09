@@ -43,6 +43,9 @@ import type {
   TaxSummary,
   TaxRule,
   TaxAnalysisResult,
+  AgentInfo,
+  MultiAgentRunRequest,
+  MultiAgentReport,
 } from './types';
 
 const API_BASE = '/api';
@@ -630,4 +633,37 @@ export const expensesApi = {
 // Health check
 export const healthApi = {
   check: () => fetchJson<{ status: string; project_dir: string }>('/health'),
+};
+
+export const agentsApi = {
+  list: () =>
+    fetchJson<{ agents: AgentInfo[] }>('/agents'),
+
+  get: (agentId: string) =>
+    fetchJson<AgentInfo>(`/agents/${agentId}`),
+};
+
+export const multiAgentApi = {
+  run: (req: MultiAgentRunRequest) =>
+    fetchJson<{ status: string; tickers: string[]; agents: string[]; invalid_agents: string[] }>(
+      '/analysis/multi-agent',
+      { method: 'POST', body: JSON.stringify(req) },
+    ),
+
+  cancel: () =>
+    fetchJson<{ status: string }>('/analysis/multi-agent/cancel', { method: 'POST' }),
+
+  getStatus: () =>
+    fetchJson<{ running: boolean; tickers: string[] }>('/analysis/multi-agent/status'),
+
+  getReports: (ticker: string, limit = 20, offset = 0) =>
+    fetchJson<{ reports: MultiAgentReport[]; total: number }>(
+      `/analysis/multi-agent/reports/${ticker}?limit=${limit}&offset=${offset}`,
+    ),
+
+  getLatest: (ticker: string) =>
+    fetchJson<{ report: MultiAgentReport | null }>(`/analysis/multi-agent/reports/${ticker}/latest`),
+
+  getReport: (id: number) =>
+    fetchJson<MultiAgentReport>(`/analysis/multi-agent/report/${id}`),
 };
