@@ -27,7 +27,7 @@ interface MultiAgentState {
   setComplete: (reports: MultiAgentReport[]) => void;
 }
 
-export const useMultiAgentStore = create<MultiAgentState>((set, get) => ({
+export const useMultiAgentStore = create<MultiAgentState>((set) => ({
   availableAgents: [],
   selectedAgentIds: [],
   isRunning: false,
