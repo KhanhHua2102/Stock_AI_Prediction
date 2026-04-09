@@ -1,0 +1,13 @@
+id: fina_analyst
+name: FINA Analyst
+category: technical
+description: Proprietary FINA analysis engine combining candles, sentiment, fundamentals, macro, and news.
+icon: ""
+requires_data:
+  - candles
+  - sentiment
+  - fundamentals
+  - macro
+  - news
+system_prompt: ""
+is_fina_analyst: true
