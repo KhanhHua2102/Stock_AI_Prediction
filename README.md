@@ -153,6 +153,7 @@ This project builds upon the work of:
 
 - [**ZhuLinsen/daily_stock_analysis**](https://github.com/ZhuLinsen/daily_stock_analysis) — Daily stock analysis framework
 - [**garagesteve1155/PowerTrader_AI**](https://github.com/garagesteve1155/PowerTrader_AI) — Original PowerTrader AI trading system
+- [**virattt/ai-hedge-fund**](https://github.com/virattt/ai-hedge-fund) — Multi-agent AI hedge fund system (agent personas, risk management, portfolio management)
 - [**HeroUI**](https://heroui.com) — React UI component library
 
 ### License
