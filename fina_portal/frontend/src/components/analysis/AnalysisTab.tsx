@@ -9,10 +9,11 @@ import { AnalysisLogStream } from './AnalysisLogStream';
 import { AnalysisProgressBar } from './AnalysisProgressBar';
 import { PortfolioAnalysisView } from './PortfolioAnalysisView';
 import { AccuracyView } from './AccuracyView';
+import { MultiAgentView } from './MultiAgentView';
 import { DraggableTickerBar } from '../common/DraggableTickerBar';
 import type { AnalysisReport, AnalysisStrategy, MarketReview } from '../../services/types';
 
-type AnalysisViewMode = 'single' | 'portfolio' | 'accuracy';
+type AnalysisViewMode = 'single' | 'portfolio' | 'accuracy' | 'multi-agent';
 
 export function AnalysisTab() {
   const tickers = useSettingsStore(selectTickers);
@@ -142,10 +143,21 @@ export function AnalysisTab() {
           >
             Accuracy
           </Button>
+          <Button
+            variant={viewMode === 'multi-agent' ? 'solid' : 'light'}
+            color={viewMode === 'multi-agent' ? 'secondary' : 'default'}
+            radius="full"
+            size="sm"
+            onClick={() => setViewMode('multi-agent')}
+          >
+            Multi-Agent
+          </Button>
         </div>
       </div>
 
-      {viewMode === 'portfolio' ? (
+      {viewMode === 'multi-agent' ? (
+        <MultiAgentView />
+      ) : viewMode === 'portfolio' ? (
         <PortfolioAnalysisView />
       ) : viewMode === 'accuracy' ? (
         <AccuracyView />
