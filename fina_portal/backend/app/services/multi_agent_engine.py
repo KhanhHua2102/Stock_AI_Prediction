@@ -128,7 +128,7 @@ async def _call_llm(system_prompt: str, user_prompt: str, log_cb: Optional[Calla
     client = AsyncOpenAI(
         base_url=settings.llm_api_base,
         api_key=settings.llm_api_key,
-        timeout=_httpx.Timeout(120.0, connect=30.0),
+        timeout=_httpx.Timeout(60.0, connect=10.0),
     )
 
     messages = []
@@ -1057,7 +1057,14 @@ class MultiAgentEngine:
 
             graph = build_workflow()
             app = graph.compile()
-            final_state = await app.ainvoke(initial_state)
+            try:
+                final_state = await asyncio.wait_for(
+                    app.ainvoke(initial_state),
+                    timeout=300,  # 5 minute hard timeout
+                )
+            except asyncio.TimeoutError:
+                self._log("Analysis timed out after 5 minutes")
+                return []
 
             if self._cancelled:
                 self._log("Analysis was cancelled")

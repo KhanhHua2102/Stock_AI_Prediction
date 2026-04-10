@@ -13,6 +13,7 @@ interface AgentSelectorProps {
   enableRiskReasoning: boolean;
   onRiskReasoningChange: (val: boolean) => void;
   onRun: () => void;
+  onCancel: () => void;
   isRunning: boolean;
 }
 
@@ -33,6 +34,7 @@ export function AgentSelector({
   enableRiskReasoning,
   onRiskReasoningChange,
   onRun,
+  onCancel,
   isRunning,
 }: AgentSelectorProps) {
   const { availableAgents, selectedAgentIds, setAvailableAgents, toggleAgent, selectAll, deselectAll } =
@@ -256,20 +258,32 @@ export function AgentSelector({
         </div>
       )}
 
-      {/* Run button */}
+      {/* Run / Cancel button */}
       <div className="flex items-center justify-between pt-1">
         <span className="text-xs text-default-400">
           Estimated LLM calls: <strong>{estimatedLlmCalls}</strong>
         </span>
-        <Button
-          color="primary"
-          onPress={onRun}
-          isDisabled={!canRun}
-          isLoading={isRunning}
-          size="sm"
-        >
-          {isRunning ? 'Running...' : 'Run Analysis'}
-        </Button>
+        <div className="flex gap-2">
+          {isRunning && (
+            <Button
+              color="danger"
+              variant="flat"
+              onPress={onCancel}
+              size="sm"
+            >
+              Stop
+            </Button>
+          )}
+          <Button
+            color="primary"
+            onPress={onRun}
+            isDisabled={!canRun}
+            isLoading={isRunning}
+            size="sm"
+          >
+            {isRunning ? 'Running...' : 'Run Analysis'}
+          </Button>
+        </div>
       </div>
     </div>
   );

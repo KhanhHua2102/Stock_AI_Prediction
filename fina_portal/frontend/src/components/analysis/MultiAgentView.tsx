@@ -37,6 +37,15 @@ export function MultiAgentView() {
     }
   };
 
+  const handleCancel = async () => {
+    try {
+      await multiAgentApi.cancel();
+    } catch {
+      // ignore — may already be stopped
+    }
+    setRunning(false, []);
+  };
+
   const tickerList = tickers
     .split(',')
     .map((t) => t.trim().toUpperCase())
@@ -60,6 +69,7 @@ export function MultiAgentView() {
             enableRiskReasoning={enableRiskReasoning}
             onRiskReasoningChange={setEnableRiskReasoning}
             onRun={handleRun}
+            onCancel={handleCancel}
             isRunning={isRunning}
           />
         </div>
