@@ -3,7 +3,8 @@ import { Button } from '@heroui/button';
 import { Checkbox } from '@heroui/checkbox';
 import { Input } from '@heroui/input';
 import { useMultiAgentStore } from '../../store/multiAgentStore';
-import { agentsApi } from '../../services/api';
+import { usePortfolioStore, getDashboardFromCache } from '../../store/portfolioStore';
+import { agentsApi, portfolioApi } from '../../services/api';
 import type { AgentInfo } from '../../services/types';
 
 interface AgentSelectorProps {
@@ -38,6 +39,11 @@ export function AgentSelector({
     useMultiAgentStore();
   const [activeCategory, setActiveCategory] = useState<string>('all');
   const [loading, setLoading] = useState(false);
+  const [portfolioTickers, setPortfolioTickers] = useState<string[]>([]);
+  const [selectedTickers, setSelectedTickers] = useState<Set<string>>(new Set());
+
+  const portfolios = usePortfolioStore((s) => s.portfolios);
+  const selectedPortfolioId = usePortfolioStore((s) => s.selectedId);
 
   useEffect(() => {
     setLoading(true);
@@ -47,6 +53,29 @@ export function AgentSelector({
       .catch(console.error)
       .finally(() => setLoading(false));
   }, [setAvailableAgents]);
+
+  // Load portfolio tickers
+  useEffect(() => {
+    if (!selectedPortfolioId) return;
+    // Try cache first
+    const cached = getDashboardFromCache(selectedPortfolioId);
+    if (cached?.summary?.holdings) {
+      setPortfolioTickers(cached.summary.holdings.map((h) => h.ticker));
+      return;
+    }
+    // Fetch from API
+    portfolioApi
+      .getHoldings(selectedPortfolioId)
+      .then((res) => {
+        setPortfolioTickers(res.holdings.map((h: { ticker: string }) => h.ticker));
+      })
+      .catch(() => setPortfolioTickers([]));
+  }, [selectedPortfolioId]);
+
+  // Sync selected tickers to parent's comma-separated string
+  useEffect(() => {
+    onTickersChange(Array.from(selectedTickers).join(', '));
+  }, [selectedTickers]);
 
   const filteredAgents = useMemo<AgentInfo[]>(() => {
     if (activeCategory === 'all') return availableAgents;
@@ -64,25 +93,84 @@ export function AgentSelector({
 
   return (
     <div className="space-y-4">
-      {/* Ticker input */}
-      <div className="flex gap-3 items-end">
-        <div className="flex-1">
-          <Input
-            label="Tickers (comma-separated)"
-            placeholder="e.g. AAPL, MSFT, GOOGL"
-            value={tickers}
-            onValueChange={onTickersChange}
-            size="sm"
-          />
-        </div>
-        <div className="flex items-center gap-2 pb-1">
-          <Checkbox
-            isSelected={enableRiskReasoning}
-            onValueChange={onRiskReasoningChange}
-            size="sm"
-          >
-            <span className="text-sm">Risk reasoning</span>
-          </Checkbox>
+      {/* Ticker selection */}
+      <div className="space-y-2">
+        {portfolioTickers.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-xs font-medium text-default-500">
+                Portfolio tickers
+                {portfolios.find((p) => p.id === selectedPortfolioId)
+                  ? ` — ${portfolios.find((p) => p.id === selectedPortfolioId)!.name}`
+                  : ''}
+              </span>
+              <div className="flex gap-1">
+                <button
+                  className="text-xs text-primary hover:underline"
+                  onClick={() => {
+                    setSelectedTickers(new Set(portfolioTickers));
+                  }}
+                >
+                  All
+                </button>
+                <span className="text-xs text-default-300">|</span>
+                <button
+                  className="text-xs text-default-400 hover:underline"
+                  onClick={() => setSelectedTickers(new Set())}
+                >
+                  None
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {portfolioTickers.map((t) => {
+                const active = selectedTickers.has(t);
+                return (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      setSelectedTickers((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(t)) next.delete(t);
+                        else next.add(t);
+                        return next;
+                      });
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-mono font-medium transition-colors ${
+                      active
+                        ? 'bg-primary text-white'
+                        : 'bg-default-100 text-default-600 hover:bg-default-200'
+                    }`}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        <div className="flex gap-3 items-end">
+          <div className="flex-1">
+            <Input
+              label={portfolioTickers.length > 0 ? 'Or enter tickers manually' : 'Tickers (comma-separated)'}
+              placeholder="e.g. AAPL, MSFT, GOOGL"
+              value={portfolioTickers.length > 0 && selectedTickers.size > 0 ? '' : tickers}
+              onValueChange={(val) => {
+                if (val) setSelectedTickers(new Set());
+                onTickersChange(val);
+              }}
+              size="sm"
+            />
+          </div>
+          <div className="flex items-center gap-2 pb-1">
+            <Checkbox
+              isSelected={enableRiskReasoning}
+              onValueChange={onRiskReasoningChange}
+              size="sm"
+            >
+              <span className="text-sm">Risk reasoning</span>
+            </Checkbox>
+          </div>
         </div>
       </div>
 
