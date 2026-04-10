@@ -458,9 +458,11 @@ def _fetch_candles(ticker: str, limit: int = 200) -> list:
         if candles:
             return candles
 
+    from app.services.portfolio_metrics import normalize_ticker
     import yfinance as yf
 
-    df = yf.download(ticker, period="2y", interval="1d", progress=False)
+    yf_ticker = normalize_ticker(ticker)
+    df = yf.download(yf_ticker, period="2y", interval="1d", progress=False)
     if df is None or df.empty:
         return []
 

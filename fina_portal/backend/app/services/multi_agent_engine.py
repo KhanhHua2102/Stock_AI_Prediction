@@ -211,38 +211,42 @@ def _emit(state: dict, msg: str) -> None:
 
 async def data_collector_node(state: MultiAgentState) -> dict:
     """Fetch all market data for each ticker in parallel."""
+    from app.services.portfolio_metrics import normalize_ticker
+
     _emit(state, "Collecting market data for all tickers...")
     result: dict[str, dict] = {}
 
     async def _collect_one(ticker: str) -> tuple[str, dict]:
+        # Normalize broker-format tickers (e.g. BGBL:AU → BGBL.AX) for API calls
+        api_ticker = normalize_ticker(ticker)
         _emit(state, f"  Fetching data for {ticker}...")
         data: dict[str, Any] = {}
 
         # Fetch candles synchronously via thread
-        candles = await asyncio.to_thread(_fetch_candles, ticker, 200)
+        candles = await asyncio.to_thread(_fetch_candles, api_ticker, 200)
         data["candles"] = candles
 
         # Parallel fetch of all other data sources
-        cik = await _get_cik(ticker) if ticker != "VNINDEX" else None
+        cik = await _get_cik(api_ticker) if api_ticker != "VNINDEX" else None
 
         tasks = {
-            "reddit_sentiment": _fetch_reddit_sentiment(ticker) if ticker != "VNINDEX" else asyncio.sleep(0),
-            "stocktwits_sentiment": _fetch_stocktwits_sentiment(ticker) if ticker != "VNINDEX" else asyncio.sleep(0),
+            "reddit_sentiment": _fetch_reddit_sentiment(api_ticker) if api_ticker != "VNINDEX" else asyncio.sleep(0),
+            "stocktwits_sentiment": _fetch_stocktwits_sentiment(api_ticker) if api_ticker != "VNINDEX" else asyncio.sleep(0),
             "fear_greed": _fetch_fear_greed_index(),
             "sec_filings": _fetch_sec_filings(cik) if cik else asyncio.sleep(0),
-            "finnhub_recommendations": _fetch_finnhub_recommendations(ticker) if ticker != "VNINDEX" else asyncio.sleep(0),
-            "ticker_news": _fetch_ticker_news(ticker),
-            "price_target": _fetch_price_target(ticker) if ticker != "VNINDEX" else asyncio.sleep(0),
-            "fmp_valuation": _fetch_fmp_valuation(ticker),
+            "finnhub_recommendations": _fetch_finnhub_recommendations(api_ticker) if api_ticker != "VNINDEX" else asyncio.sleep(0),
+            "ticker_news": _fetch_ticker_news(api_ticker),
+            "price_target": _fetch_price_target(api_ticker) if api_ticker != "VNINDEX" else asyncio.sleep(0),
+            "fmp_valuation": _fetch_fmp_valuation(api_ticker),
             "treasury_rates": _fetch_treasury_rates(),
-            "macro_indicators": _fetch_macro_indicators(ticker),
+            "macro_indicators": _fetch_macro_indicators(api_ticker),
             # financialdatasets.ai sources
-            "financial_metrics": fd_api.fetch_financial_metrics(ticker),
-            "insider_trades": fd_api.fetch_insider_trades(ticker),
-            "company_news": fd_api.fetch_company_news(ticker),
-            "company_facts": fd_api.fetch_company_facts(ticker),
+            "financial_metrics": fd_api.fetch_financial_metrics(api_ticker),
+            "insider_trades": fd_api.fetch_insider_trades(api_ticker),
+            "company_news": fd_api.fetch_company_news(api_ticker),
+            "company_facts": fd_api.fetch_company_facts(api_ticker),
             "line_items": fd_api.fetch_line_items(
-                ticker,
+                api_ticker,
                 ["revenue", "net_income", "earnings_per_share", "free_cash_flow", "total_debt"],
             ),
         }
