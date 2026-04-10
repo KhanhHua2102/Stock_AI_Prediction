@@ -1077,13 +1077,16 @@ class AnalysisEngine:
         return self._current_ticker
 
     def register_log_callback(self, cb: Callable):
-        self._log_callbacks.append(cb)
+        if cb not in self._log_callbacks:
+            self._log_callbacks.append(cb)
 
     def register_complete_callback(self, cb: Callable):
-        self._complete_callbacks.append(cb)
+        if cb not in self._complete_callbacks:
+            self._complete_callbacks.append(cb)
 
     def register_cancel_callback(self, cb: Callable):
-        self._cancel_callbacks.append(cb)
+        if cb not in self._cancel_callbacks:
+            self._cancel_callbacks.append(cb)
 
     def _check_cancelled(self):
         if self._cancel_event.is_set():

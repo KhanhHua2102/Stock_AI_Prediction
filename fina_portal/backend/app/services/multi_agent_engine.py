@@ -999,13 +999,16 @@ class MultiAgentEngine:
         return list(self._current_tickers)
 
     def register_log_callback(self, cb: Callable) -> None:
-        self._log_callbacks.append(cb)
+        if cb not in self._log_callbacks:
+            self._log_callbacks.append(cb)
 
     def register_complete_callback(self, cb: Callable) -> None:
-        self._complete_callbacks.append(cb)
+        if cb not in self._complete_callbacks:
+            self._complete_callbacks.append(cb)
 
     def register_cancel_callback(self, cb: Callable) -> None:
-        self._cancel_callbacks.append(cb)
+        if cb not in self._cancel_callbacks:
+            self._cancel_callbacks.append(cb)
 
     def _log(self, msg: str) -> None:
         logger.info("[MultiAgent] %s", msg)
