@@ -42,7 +42,9 @@ export function MultiAgentView() {
     .map((t) => t.trim().toUpperCase())
     .filter(Boolean);
 
-  const tickersWithReports = tickerList.filter((t) => latestReports[t]);
+  const tickersWithReports = tickerList.filter(
+    (t) => latestReports[t] && latestReports[t].agent_signals?.length > 0,
+  );
 
   return (
     <div className="flex-1 overflow-auto p-4">

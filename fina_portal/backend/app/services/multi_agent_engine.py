@@ -1059,20 +1059,64 @@ class MultiAgentEngine:
                 self._log("Analysis was cancelled")
                 return []
 
+            # Build per-ticker report dicts for storage and frontend
+            consensus = final_state.get("consensus", {})
             recommendations = final_state.get("recommendations", [])
-            self._log(f"Analysis complete: {len(recommendations)} recommendations")
+            agent_signals = final_state.get("agent_signals", [])
+            debate_rounds = final_state.get("debate_rounds", [])
+            risk_assessment = final_state.get("risk_assessment", {})
+            market_data = final_state.get("market_data", {})
+
+            reports = []
+            for ticker in tickers:
+                ticker_consensus = consensus.get(ticker, {})
+                ticker_rec = next((r for r in recommendations if r.get("ticker") == ticker), None)
+                ticker_signals = [s for s in agent_signals if s.get("ticker") == ticker]
+                ticker_debates = [d for d in debate_rounds if d.get("ticker") == ticker]
+                ticker_market = market_data.get(ticker, {})
+
+                report = {
+                    "ticker": ticker,
+                    "selected_agents": list(agent_ids),
+                    "portfolio_context": portfolio_context,
+                    "agent_signals": ticker_signals,
+                    "debate_occurred": len(ticker_debates) > 0,
+                    "debate_rounds": ticker_debates,
+                    "risk_assessment": risk_assessment.get("per_ticker", {}).get(ticker),
+                    "risk_reasoning": final_state.get("risk_reasoning", ""),
+                    "consensus_action": ticker_consensus.get("action", "HOLD"),
+                    "consensus_confidence": ticker_consensus.get("confidence", 0.0),
+                    "consensus_reasoning": ticker_consensus.get("reasoning", ""),
+                    "recommendation": ticker_rec,
+                    "market_data_summary": {
+                        "current_price": ticker_market.get("current_price"),
+                    },
+                    "model_used": settings.llm_model,
+                    "total_duration_ms": None,
+                    "price_at_analysis": ticker_market.get("current_price"),
+                }
+                reports.append(report)
+
+            self._log(f"Analysis complete: {len(reports)} ticker(s)")
 
             for cb in self._complete_callbacks:
                 try:
-                    cb(recommendations)
+                    cb(reports)
                 except Exception:
                     pass
 
-            return recommendations
+            return reports
 
         except Exception as e:
             logger.error("MultiAgentEngine.run failed: %s", e)
-            raise
+            # Send error to frontend so it doesn't hang
+            self._log(f"Analysis failed: {e}")
+            for cb in self._complete_callbacks:
+                try:
+                    cb([])
+                except Exception:
+                    pass
+            return []
         finally:
             self._running = False
             self._current_tickers = []

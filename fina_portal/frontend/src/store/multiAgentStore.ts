@@ -77,7 +77,9 @@ export const useMultiAgentStore = create<MultiAgentState>((set) => ({
     set((s) => {
       const updated = { ...s.latestReports };
       for (const r of reports) {
-        updated[r.ticker] = r;
+        if (r?.ticker && r?.agent_signals?.length > 0) {
+          updated[r.ticker] = r;
+        }
       }
       return { latestReports: updated, isRunning: false, runningTickers: [] };
     }),
